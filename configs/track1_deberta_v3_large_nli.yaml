@@ -1,0 +1,56 @@
+# Track 1 (English) P0 backbone: DeBERTa-v3-large already fine-tuned on
+# MNLI/FEVER/ANLI/LingNLI/WANLI. NLI intermediate training encodes entailment
+# direction; its 3-way head is re-initialised to the 4 DiCo labels. Large
+# DeBERTa is seed-unstable on small data (pilot) — keep lr low, run 3+ seeds.
+# Needs a >=24 GB GPU at batch 16 (remote training machine).
+
+data_root: data/raw/dico/final_data
+train_files:
+  - train/dico_nli_train_track1_participant_labeled.csv
+val_files:
+  - dev/dico_nli_dev_track1_participant_labeled.csv
+test_files: []
+# Label-safe train-only augmentation (src/augment.py): reverse_negatives, transitive
+augment: []
+seed: 42
+
+ckpt_dir: checkpoints
+result_dir: results
+run_name: null
+
+epochs: 8
+batch_size: 16
+pin_memory: true
+amp: true
+lr: 8.0e-6
+weight_decay: 0.01
+log_every: 50
+eval_every: 1
+ckpt_every: 0
+
+consistency_weight: 0.5
+
+decoding: twin
+neg_bias: 0.0
+structural_prior: false
+
+arch:
+  backbone: MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli
+  max_length: 128
+
+lr_scheduler:
+  type: warmup_linear
+  t_max: auto
+  warmup_ratio: 0.1
+early_stopping:
+  enabled: true
+  monitor: dico_mean
+  mode: max
+  patience: 3
+save_best: true
+best_metric: dico_mean
+best_mode: max
+
+wandb:
+  enabled: false
+  project: dico-nli

@@ -1,13 +1,11 @@
-"""Reference model: an MLP backbone with a linear classification head.
+"""DiCo-NLI pair classifier: a Hugging Face cross-encoder with a 4-way head.
 
-    x (B, input_dim)
-      -> MLPBackbone            -> feature (B, embed_dim)
-      -> nn.Linear(embed_dim, num_classes) -> logits (B, num_classes)
+    (input_ids, attention_mask[, token_type_ids]) (B, T)
+      -> AutoModelForSequenceClassification
+      -> logits (B, 4), feature = last-layer first-token state (B, H)
 
-`forward` returns `(logits, feature)` and accepts an optional `label` argument
-that is currently unused. It is kept in the signature so a margin/ArcFace-style
-head can replace the plain linear head later without touching the training
-loop, the evaluator, or the tests.
+`forward` returns `(logits, feature)` — the same contract as the template — so
+the training loop, evaluator, and tests do not depend on the backbone family.
 """
 
 from typing import Optional, Tuple
@@ -15,76 +13,93 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-from src.config import MLPConfig
+from src.config import ModelConfig
+from src.labels import ID2LABEL, LABEL2ID
+
+# Config attributes that control head dropout across backbone families
+# (BERT/RoBERTa/XLM-R: classifier_dropout; DeBERTa-v2/v3: cls_dropout;
+# ALBERT: classifier_dropout_prob).
+_DROPOUT_ATTRS = ("classifier_dropout", "cls_dropout", "classifier_dropout_prob")
 
 
-def _make_activation(name: str) -> nn.Module:
-    if name == "relu":
-        return nn.ReLU(inplace=True)
-    if name == "gelu":
-        return nn.GELU()
-    if name == "tanh":
-        return nn.Tanh()
-    if name == "silu":
-        return nn.SiLU(inplace=True)
-    raise ValueError(f"unknown activation: {name!r}")
+def build_tokenizer(cfg: ModelConfig):
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer_name)
+    if tokenizer.pad_token is None:  # decoder-only backbones
+        tokenizer.pad_token = tokenizer.eos_token
+    if cfg.fix_pair_template:
+        _fix_pair_template(tokenizer, cfg.backbone)
+    return tokenizer
 
 
-class MLPBackbone(nn.Module):
-    """`input_dim -> hidden_dims -> embed_dim` with BN, activation, dropout."""
+def _fix_pair_template(tokenizer, backbone: str) -> None:
+    """Rebuild `[CLS] A [SEP] B [SEP]` from the model config's special ids.
 
-    def __init__(self, cfg: MLPConfig):
-        super().__init__()
-        layers = []
-        in_dim = cfg.input_dim
-        for hidden_dim in cfg.hidden_dims:
-            layers.append(nn.Linear(in_dim, hidden_dim))
-            if cfg.batch_norm:
-                layers.append(nn.BatchNorm1d(hidden_dim))
-            layers.append(_make_activation(cfg.activation))
-            if cfg.dropout > 0:
-                layers.append(nn.Dropout(cfg.dropout))
-            in_dim = hidden_dim
+    Some checkpoints ship a post-processor with the wrong specials (e.g.
+    HiTZ/JaunBERT encodes a pair as `<unk> A<s><unk> B<s>`).
+    """
+    from tokenizers.processors import TemplateProcessing
+    from transformers import AutoConfig
 
-        # Project the last hidden width to the requested embedding width. When
-        # hidden_dims is empty this is just a Linear(input_dim, embed_dim).
-        if in_dim != cfg.embed_dim or not cfg.hidden_dims:
-            layers.append(nn.Linear(in_dim, cfg.embed_dim))
-            if cfg.batch_norm:
-                layers.append(nn.BatchNorm1d(cfg.embed_dim))
-            layers.append(_make_activation(cfg.activation))
-
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+    hf_cfg = AutoConfig.from_pretrained(backbone)
+    cls_id = getattr(hf_cfg, "cls_token_id", None) or hf_cfg.bos_token_id
+    sep_id = getattr(hf_cfg, "sep_token_id", None) or hf_cfg.eos_token_id
+    cls = tokenizer.convert_ids_to_tokens(cls_id)
+    sep = tokenizer.convert_ids_to_tokens(sep_id)
+    tokenizer.backend_tokenizer.post_processor = TemplateProcessing(
+        single=f"{cls} $A {sep}",
+        pair=f"{cls} $A {sep} $B:1 {sep}:1",
+        special_tokens=[(cls, cls_id), (sep, sep_id)],
+    )
 
 
-class MLPClassifier(nn.Module):
-    def __init__(self, cfg: MLPConfig):
+def build_hf_model(cfg: ModelConfig) -> nn.Module:
+    from transformers import AutoConfig, AutoModelForSequenceClassification
+
+    hf_cfg = AutoConfig.from_pretrained(
+        cfg.backbone,
+        num_labels=cfg.num_labels,
+        id2label=ID2LABEL,
+        label2id=LABEL2ID,
+    )
+    if cfg.classifier_dropout is not None:
+        for attr in _DROPOUT_ATTRS:
+            if hasattr(hf_cfg, attr):
+                setattr(hf_cfg, attr, cfg.classifier_dropout)
+    # Checkpoints fine-tuned on 3-way NLI ship a head of a different shape;
+    # re-initialise it for our 4 labels.
+    return AutoModelForSequenceClassification.from_pretrained(
+        cfg.backbone, config=hf_cfg, ignore_mismatched_sizes=True
+    )
+
+
+class PairClassifier(nn.Module):
+    def __init__(self, cfg: ModelConfig, hf_model: Optional[nn.Module] = None):
         super().__init__()
         self.cfg = cfg
-        if cfg.num_classes <= 0:
-            raise ValueError(
-                "MLPConfig.num_classes must be set (> 0) before building the model"
-            )
-        self.backbone = MLPBackbone(cfg)
-        self.head = nn.Linear(cfg.embed_dim, cfg.num_classes)
-
-    def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
-        """Feature vector alone — useful for retrieval / calibration paths."""
-        return self.backbone(x)
+        self.hf = hf_model if hf_model is not None else build_hf_model(cfg)
+        if getattr(self.hf.config, "pad_token_id", None) is None:
+            self.hf.config.pad_token_id = self.hf.config.eos_token_id
 
     def forward(
         self,
-        x: torch.Tensor,
-        label: Optional[torch.Tensor] = None,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """x: (B, input_dim). `label` is accepted for interface parity with
-        margin-based heads and is currently unused.
+        """Returns (logits (B, num_labels), feature (B, hidden))."""
+        kwargs = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if token_type_ids is not None:
+            kwargs["token_type_ids"] = token_type_ids
+        out = self.hf(**kwargs, output_hidden_states=True)
+        feature = out.hidden_states[-1][:, 0]
+        return out.logits, feature
 
-        Returns (logits (B, num_classes), feature (B, embed_dim)).
-        """
-        feature = self.backbone(x)
-        logits = self.head(feature)
-        return logits, feature
+
+MODEL_INPUT_KEYS = ("input_ids", "attention_mask", "token_type_ids")
+
+
+def model_inputs(batch: dict, device: torch.device) -> dict:
+    """The tensors `PairClassifier.forward` consumes, moved to `device`."""
+    return {k: batch[k].to(device) for k in MODEL_INPUT_KEYS if k in batch}

@@ -48,6 +48,7 @@ def build_lr_scheduler(
     step          : StepLR(step_size, gamma)
     cosine        : CosineAnnealingLR(t_max, eta_min) — the reference's choice
     warmup_cosine : linear warmup then cosine decay (transformers convention)
+    warmup_linear : linear warmup then linear decay to 0 (BERT fine-tuning default)
     plateau       : ReduceLROnPlateau(mode, factor, patience), needs a metric
     """
     if not cfg:
@@ -72,15 +73,18 @@ def build_lr_scheduler(
             scheduler, step_kind="step", start_epoch=cfg.get("start_epoch", 0)
         )
 
-    if sched_type == "warmup_cosine":
+    if sched_type in ("warmup_cosine", "warmup_linear"):
         warmup_steps = max(cfg.get("warmup_steps", 20), 1)
         total_steps = max(cfg.get("t_max", 200), warmup_steps + 1)
+        linear = sched_type == "warmup_linear"
 
         def lr_lambda(step: int) -> float:
             if step < warmup_steps:
                 return (step + 1) / warmup_steps
-            progress = (step - warmup_steps) / (total_steps - warmup_steps)
-            return 0.5 * (1 + math.cos(math.pi * min(progress, 1.0)))
+            progress = min((step - warmup_steps) / (total_steps - warmup_steps), 1.0)
+            if linear:
+                return 1.0 - progress
+            return 0.5 * (1 + math.cos(math.pi * progress))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
         return LRSchedulerCallback(

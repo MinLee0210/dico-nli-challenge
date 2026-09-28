@@ -115,6 +115,6 @@ class WandbCallback(Callback):
         if self.enabled and self.log_artifacts and ctx is not None:
             best_path = Path(ctx.ckpt_dir) / "best.pt"
             if best_path.exists():
-                run_label = self.run.name if self.run is not None else "mlp"
+                run_label = self.run.name if self.run is not None else "dico"
                 self.log_artifact(best_path, name=f"{run_label}-best")
         self.finish()

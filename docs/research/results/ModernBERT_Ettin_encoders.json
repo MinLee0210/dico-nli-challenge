@@ -1,0 +1,51 @@
+{
+  "name": "ModernBERT (base/large) and Ettin encoder suite (17M-1B), incl. NLI-tuned variants (tasksource/ModernBERT-*-nli, MoritzLaurer/ModernBERT-large-zeroshot-v2.0)",
+  "category": "model",
+  "links": {
+    "paper": "Warner et al., 'Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast, Memory Efficient, and Long Context Finetuning and Inference' (arXiv:2412.13663, ACL 2025); Weller et al., 'Seq vs Seq: An Open Suite of Paired Encoders and Decoders' (Ettin; arXiv:2507.11412); Antoun et al., 'ModernBERT or DeBERTaV3? Examining Architecture and Data Influence on Transformer Encoder Models Performance' (arXiv:2504.08716, IJCNLP-AACL 2025)",
+    "hf_models": [
+      "answerdotai/ModernBERT-base",
+      "answerdotai/ModernBERT-large",
+      "tasksource/ModernBERT-base-nli",
+      "tasksource/ModernBERT-large-nli",
+      "MoritzLaurer/ModernBERT-large-zeroshot-v2.0 [uncertain]",
+      "jhu-clsp/ettin-encoder-17m, -32m, -68m, -150m, -400m, -1b"
+    ],
+    "code": [
+      "https://github.com/AnswerDotAI/ModernBERT",
+      "https://github.com/JHU-CLSP/ettin-encoder-vs-decoder",
+      "https://huggingface.co/blog/ettin"
+    ]
+  },
+  "year": "ModernBERT: December 2024; Ettin: July 2025",
+  "license_access": "Open-weight. ModernBERT Apache-2.0; Ettin MIT (open training data: DCLM, Dolma v1.7, scientific papers, code, curated sources); tasksource/ModernBERT-*-nli Apache-2.0.",
+  "track_coverage": "T1 (EN) only. Trained on English + code; the 50k BPE tokenizer handles Spanish poorly and Basque very poorly. T2-T4 only via translate-test. (The multilingual successor mmBERT, built on the same recipe and covering Basque, is a separate survey item.)",
+  "basque_quality": "None. English/code-only pretraining; no Basque benchmark results. Not a candidate for T3/T4.",
+  "cross_lingual_robustness": "Not applicable natively; mixed-language inputs would be largely out-of-vocabulary in meaning. Only translate-test is possible, with the MT error on short phrases dominating the gap. [uncertain]",
+  "architecture": "Encoder-only, MLM-pretrained (30% masking) modernized BERT: RoPE positions, alternating local (128-token sliding window) / global attention every 3rd layer, GeGLU FFN, pre-norm, no biases, unpadding + Flash Attention, 8,192-token context, OLMo-derived 50,368-token BPE tokenizer, no token_type_ids. ModernBERT: 2T tokens English web + code. Ettin: same ModernBERT-style architecture and tokenizer, 6 sizes trained on ~2T open-data tokens in three phases (pretrain, mid-training/context extension, decay), with paired decoder twins trained on identical data. Classification via AutoModelForSequenceClassification (mean or CLS pooling head).",
+  "params": "ModernBERT-base 149M (22 layers, hidden 768); ModernBERT-large 395M (28 layers, hidden 1024). Ettin encoders: 17M (7L/256), 32M (10L/384), 68M (19L/512), 150M (22L/768), 400M (28L/1024), 1B (28L/1792).",
+  "compute": "Cheaper than DeBERTa-v3 at equal size thanks to unpadding and Flash Attention 2 (needs transformers >= 4.48 and flash-attn for full speed). ModernBERT-large / Ettin-400M fine-tune in minutes on a single 24 GB GPU with max_len 64; Ettin-1B fits 24 GB in bf16 at modest batch sizes (or use 40-80 GB for larger batches); a full 5-fold x 3-seed sweep of Ettin-1B is a few GPU-hours on an A100. [uncertain]",
+  "sample_efficiency": "Weaker than DeBERTa-v3 in controlled comparisons: Antoun et al. (2025) pretrained ModernBERT on the same data as a DeBERTaV3 model and found DeBERTaV3 superior in sample efficiency and overall benchmark performance, ModernBERT's advantage being speed. In the DiCo pilot, ModernBERT-base was the weakest non-ALBERT encoder on unseen coherence and showed large train/validation gaps; the pilot also reported high hyperparameter sensitivity for all encoders. ModernBERT reportedly prefers higher learning rates than DeBERTa (e.g. 3e-5 used for MNLI in the paper; up to ~8e-5 for base in practice). Expect higher seed variance than DeBERTa-v3 on ~1.3k reversible source pairs unless starting from an NLI-tuned checkpoint (tasksource/ModernBERT-large-nli). Ettin has no public NLI-intermediate checkpoints. [uncertain]",
+  "reported_results": "GLUE avg: ModernBERT-base 88.4 vs DeBERTa-v3-base 88.1 (first MLM model to beat it at base size); ModernBERT-large 90.4 vs DeBERTa-v3-large 91.4. Ettin encoders GLUE avg: 150M 88.9, 400M 90.8 (vs ModernBERT 88.4/90.4); Ettin-1B roughly on par with DeBERTa-v1-xl on GLUE (reported 91.8 vs 91.7 on one aggregate) [uncertain]; Ettin-150M MNLI 89.2 [uncertain]. ModernBERT MNLI fine-tuning used lr 3e-5, 2 epochs. tasksource/ModernBERT-large-nli: MNLI 0.89, ANLI A1/A2/A3 0.72/0.54/0.55, SNLI 0.94. Pilot on PhrasIS (weighted F1, Positives I/H/A): ModernBERT-base 0.66/0.63/0.68, ModernBERT-large 0.71/0.67/0.72; All track base 0.86/0.85/0.86, large 0.86/0.87/0.87 (below DeBERTa-v3 base 0.73/0.73/0.75). Unseen SoftCoh Positives I/H/A: base 0.73/0.63/0.67, large 0.75/0.67/0.76; unseen HardCoh Positives I/H/A: base 0.68/0.57/0.63, large 0.71/0.63/0.72. No published PhrasIS/DiCo result for Ettin.",
+  "pilot_dico_results": "ModernBERT evaluated (fine-tuned from answerdotai/ModernBERT-base/-large; the pilot code's example SLURM scripts use ModernBERT-base, max_length 256). Positives combined (A): ModernBERT-base F1 0.68 / unseen SoftCoh 0.67 / unseen HardCoh 0.63; ModernBERT-large 0.72 / 0.76 / 0.72, vs DeBERTa-v3-base 0.75 / 0.84 / 0.79. Pilot text notes ModernBERT-large 'close behind' DeBERTa-v3 on F1, but it trails clearly on coherence. Ettin not evaluated. Label space was PhrasIS Positives (6 labels), not DiCo 4-way.",
+  "consistency_guarantee": "none (plain cross-encoder); inference-time consistency only if wrapped by symmetric scoring / joint pair decoding.",
+  "negative_other_handling": "Standard 4th softmax class; can emit NEGATIVE_OTHER on one direction of a reversible pair (no structural constraint). An NLI-tuned variant (tasksource/ModernBERT-large-nli) supports the bidirectional-entailment prior (EQ = both directions entail, FE/BE = one direction, NEG = neither); raw ModernBERT/Ettin have no such prior and must learn NEG vs SIMI/REL purely from ~0.5k NEG examples.",
+  "metric_tradeoff": "Based on the pilot, expect 3-7 points lower Weighted F1 and a larger SoftCons/HardCons gap than DeBERTa-v3 when used alone; symmetric decoding would close the SoftCons gap but not the accuracy gap, so HardCons stays lower. As a diverse ensemble member (different pretraining data and tokenizer) it may still add a point via variance reduction. [uncertain]",
+  "integration": "AutoModelForSequenceClassification.from_pretrained('answerdotai/ModernBERT-large' | 'tasksource/ModernBERT-large-nli' | 'jhu-clsp/ettin-encoder-1b', num_labels=4, ignore_mismatched_sizes=True) with AutoTokenizer; pair encoding tokenizer(p1, p2) works (no token_type_ids). Use attn_implementation='flash_attention_2' + bf16 on the remote GPU; set classifier_pooling ('cls' vs 'mean') and classifier_dropout via config (the pilot code already handles classifier_dropout). Same symmetric-scoring and REVERSE_PERM post-processing as for DeBERTa.",
+  "ensemble_compatibility": "Yes: softmax class probabilities; calibrate with temperature scaling on grouped dev before pooling.",
+  "inference_cost": "Negligible (seconds for ~4k rows x 2 directions with base/large; under a minute for Ettin-1B).",
+  "rules_disclosure": "Disclose: open-weight; encoder-only (ModernBERT / Ettin); fine-tuned; external data only if an NLI-tuned checkpoint is used (tasksource multi-task NLI mixture: MNLI, ANLI, SICK, WANLI, DocNLI, LingNLI, FOLIO, FOL-NLI, LogicNLI, label-NLI, etc.). Ettin's fully open pretraining data makes contamination auditing easier than for most models.",
+  "contamination": "Pretraining corpora are large web + code crawls (ModernBERT: undisclosed-mixture 2T tokens incl. code; Ettin: DCLM, Dolma v1.7, code) that could include GitHub copies of PhrasIS/iSTS data files (PhrasIS train/test labels are public, e.g. the pilot repo) - low impact for MLM encoders but not zero [uncertain]. SICK in the tasksource mixture is caption-derived (same domain as the PhrasIS Images subset) but contains no PhrasIS pairs. The pending PhrasIS data-use policy applies to any direct use of PhrasIS.",
+  "structural_cue_dependence": "None intrinsically; uses only the phrase texts.",
+  "priority": "P2",
+  "expected_gain": "Low for Track 1 as a primary model: the pilot places ModernBERT-large below DeBERTa-v3 on F1 and well below on coherence, and a controlled study attributes DeBERTaV3's edge to RTD sample efficiency, which matters most with ~1.3k source pairs. Worth one grouped-CV run of tasksource/ModernBERT-large-nli and Ettin-1B (the largest encoder in this family, GLUE ~ DeBERTa-v3-large level) as diverse ensemble members after the DeBERTa-v3 pipeline is in place; expected gain +0 to +1 F1 via ensembling, not as a replacement. [uncertain]",
+  "uncertain": [
+    "cross_lingual_robustness",
+    "compute",
+    "sample_efficiency",
+    "reported_results",
+    "metric_tradeoff",
+    "contamination",
+    "expected_gain"
+  ]
+}

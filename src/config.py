@@ -1,61 +1,54 @@
-"""Model architecture for the reference MLP classifier.
+"""Model architecture for the DiCo-NLI pair classifier.
 
-This is the ARCHITECTURE-ONLY config — layer widths, activations, and
-regularization. Training-loop hyperparameters (epochs, lr, data paths,
-callback wiring) live in `src.pipelines.config.TrainingConfig`, mirroring the
-split used by the reference research codebase this template is modelled on.
-
-Replace this file's `MLPConfig` with your own model's config; keep the split so
-checkpoints can rebuild the architecture without the training YAML.
+This is the ARCHITECTURE-ONLY config — which pretrained backbone, how inputs
+are truncated, head dropout. Training-loop hyperparameters (epochs, lr, data
+paths, loss weights, decoding) live in `src.pipelines.config.TrainingConfig`.
+The split lets a checkpoint rebuild its model without the training YAML.
 """
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional
 
-# Activation name -> nn.Module class resolved in src.modules.model. Kept as
-# strings here so this dataclass stays free of torch imports and is cheap to
-# serialize into a checkpoint.
-SUPPORTED_ACTIVATIONS = ("relu", "gelu", "tanh", "silu")
+from src.labels import NUM_LABELS
 
 
 @dataclass
-class MLPConfig:
-    """A stack of fully-connected blocks plus a linear classification head.
+class ModelConfig:
+    """A Hugging Face cross-encoder with a 4-way classification head.
 
-    Layout:
+        (text1, text2) -> tokenizer pair encoding -> backbone -> [CLS] feature
+                       -> classification head -> logits over LABELS
 
-        x (input_dim) -> [Linear -> (BatchNorm) -> Activation -> Dropout] * n
-                      -> embed_dim -> Linear -> num_classes
-
-    The penultimate `embed_dim` vector is returned alongside the logits so
-    downstream code can use the representation (retrieval, clustering, a
-    different head) without re-running the backbone.
+    Any `AutoModelForSequenceClassification`-compatible id or local path works
+    (DeBERTa-v3, mDeBERTa, XLM-R, BERnaT, ...).
     """
 
-    # --- classifier head ---
-    num_classes: int = 0  # set at runtime from the dataset
-    embed_dim: int = 128  # width of the penultimate feature vector
-
-    # --- input ---
-    input_dim: int = 0  # set at runtime from the dataset
-
-    # --- backbone ---
-    hidden_dims: Tuple[int, ...] = (256, 256)
-    dropout: float = 0.1
-    activation: str = "relu"
-    batch_norm: bool = True
+    backbone: str = "microsoft/mdeberta-v3-base"
+    # Tokenizer id/path; defaults to `backbone`.
+    tokenizer: Optional[str] = None
+    num_labels: int = NUM_LABELS
+    # Phrases average ~6 words per pair; 128 subword tokens is ample.
+    max_length: int = 128
+    # Overrides the backbone's classifier/pooler dropout when set.
+    classifier_dropout: Optional[float] = None
+    # Rebuild the tokenizer's pair template from the model config's CLS/SEP
+    # ids, for checkpoints whose post-processor is broken (HiTZ/JaunBERT).
+    fix_pair_template: bool = False
 
     def __post_init__(self) -> None:
-        if self.num_classes < 0:
-            raise ValueError(f"num_classes must be >= 0, got {self.num_classes}")
-        if self.input_dim < 0:
-            raise ValueError(f"input_dim must be >= 0, got {self.input_dim}")
-        if self.embed_dim <= 0:
-            raise ValueError(f"embed_dim must be > 0, got {self.embed_dim}")
-        if not 0.0 <= self.dropout < 1.0:
-            raise ValueError(f"dropout must be in [0, 1), got {self.dropout}")
-        if self.activation not in SUPPORTED_ACTIVATIONS:
+        if not self.backbone:
+            raise ValueError("backbone must be a model id or path")
+        if self.num_labels != NUM_LABELS:
+            raise ValueError(f"num_labels must be {NUM_LABELS}, got {self.num_labels}")
+        if self.max_length <= 0:
+            raise ValueError(f"max_length must be > 0, got {self.max_length}")
+        if self.classifier_dropout is not None and not (
+            0.0 <= self.classifier_dropout < 1.0
+        ):
             raise ValueError(
-                f"unknown activation {self.activation!r}; "
-                f"choose from {SUPPORTED_ACTIVATIONS}"
+                f"classifier_dropout must be in [0, 1), got {self.classifier_dropout}"
             )
+
+    @property
+    def tokenizer_name(self) -> str:
+        return self.tokenizer or self.backbone

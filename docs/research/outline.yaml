@@ -1,0 +1,119 @@
+topic: >-
+  SemEval-2027 Task 2 DiCo-NLI — directional-consistent fine-grained phrase-level
+  NLI (EQUIVALENCE / FORWARD_ENTAILMENT / BACKWARD_ENTAILMENT / NEGATIVE_OTHER)
+  over PhrasIS-derived phrase pairs in EN / ES / EU / mixed; scored by Weighted
+  F1, SoftCons, HardCons. Goal: choose modeling approaches that maximize all
+  three scores.
+
+# Context gathered before the outline (2026-09-28):
+#  - train 3042 / dev 660 rows per monolingual track; Track 4 = 6 cross-lingual
+#    combos x the same source pairs (18252 / 3960 rows).
+#  - every reversible item has its reversed twin in the same file; twin id =
+#    swap langs + original<->flipped (verified on all reference files).
+#  - NEGATIVE_OTHER items are singletons (no twin) in train/dev.
+#  - the same pair_id appears in all four tracks (3 monolingual + 12 mixed views).
+#  - fine-tuning runs on a separate (remote) GPU machine; the local machine is
+#    not a constraint.
+
+items:
+  # --- models ---
+  - id: deberta-v3-en
+    name: DeBERTa-v3 base/large + English NLI checkpoints
+    category: model
+    note: pilot best (0.75/0.84/0.79); MoritzLaurer *-mnli-fever-anli-ling-wanli, tasksource
+  - id: modernbert-ettin
+    name: ModernBERT / Ettin encoders
+    category: model
+    note: newer English-only encoders; Track 1 challenger to DeBERTa-v3
+  - id: mdeberta-v3
+    name: mDeBERTa-v3-base + multilingual NLI checkpoints
+    category: model
+    note: MoritzLaurer mDeBERTa-v3-base-xnli-multilingual-nli-2mil7
+  - id: xlmr
+    name: XLM-RoBERTa base/large + XNLI checkpoints + bge-reranker-v2-m3
+    category: model
+    note: strong multilingual cross-encoder baselines incl. Basque
+  - id: new-multilingual-encoders
+    name: mmBERT and EuroBERT
+    category: model
+    note: 2025 encoders; mmBERT covers Basque, EuroBERT does not
+  - id: basque-encoders
+    name: BERnaT, BERTeus, ElhBERTeu, RoBERTa-euscrawl
+    category: model
+    note: monolingual Basque encoders for Track 3
+  - id: spanish-encoders
+    name: RoBERTa-BNE / MarIA, BETO
+    category: model
+    note: monolingual Spanish encoders for Track 2
+  - id: latxa
+    name: Latxa 3.1 (Llama-3.1 8B/70B, Basque)
+    category: model
+    note: Basque LLM; LoRA classification or prompting
+  - id: open-llms-lora
+    name: Open multilingual LLMs with LoRA (Qwen3, Gemma 3, Llama 3.x, Salamandra)
+    category: model
+    note: decoder-only seq-classification fine-tuning
+  - id: enc-dec
+    name: Encoder-decoder (BART-large, mT5/mT0, Aya-101)
+    category: model
+    note: pilot second-best family (BART-large 0.68/0.80/0.72)
+  - id: api-llms
+    name: API LLMs zero/few-shot (Claude, GPT, Gemini)
+    category: model
+    note: teacher, pseudo-labeler, or ensemble member
+  # --- methods ---
+  - id: joint-decoding
+    name: Joint pair decoding with NEGATIVE_OTHER gate
+    category: method
+    note: argmax over consistent label pairs; guarantees SoftCons=1 on predicted-reversible pairs
+  - id: antisymmetric-arch
+    name: Antisymmetric / hierarchical two-head architecture
+    category: method
+    note: related-vs-NEG head + direction head with p(FE|a,b)=p(BE|b,a)
+  - id: consistency-loss
+    name: Consistency regularization (reversal + cross-lingual view KL)
+    category: method
+    note: symmetric KL between p(x) and Rev(p(x_rev)); agreement across language views
+  - id: view-aggregation
+    name: Cross-lingual view aggregation via shared pair_id
+    category: method
+    note: pool log-probs over all views of a source pair (incl. across tracks)
+  - id: translation
+    name: Translate-train / translate-test / back-translation
+    category: method
+    note: NLLB-200, HiTZ Itzuli, OPUS-MT, MADLAD-400
+  - id: aux-data
+    name: Auxiliary data transfer
+    category: method
+    note: PhrasIS, iSTS 2015/16, MNLI/XNLI/XNLIeu, WordNet/MCR, PPDB
+  - id: llm-distillation
+    name: LLM teacher distillation / pseudo-labeling with consistency filter
+    category: method
+    note: label extra phrase pairs with a strong LLM, keep reverse-consistent outputs
+  - id: ensembling
+    name: Ensembling, grouped CV, calibration, NEG-threshold tuning
+    category: method
+    note: small data (~1.3k reversible source pairs) favors fold ensembles
+  - id: structural-cue
+    name: Structural cue (singleton pair_id => NEGATIVE_OTHER)
+    category: method
+    note: exact in train/dev; rule-compliance and robustness risk
+  # --- added 2026-09-28 after the deep survey (latest models, augmentation);
+  # not yet deep-researched: run /research-deep to fill results/ ---
+  - id: jaunbert-mrbert
+    name: JaunBERT and MrBERT (2025-2026 ModernBERT-style Iberian/Basque encoders)
+    category: model
+    note: HiTZ/JaunBERT (Jul 2026, Basque), BSC-LT/MrBERT (Dec 2025); broken upstream pair templates
+  - id: qwen35-latxa
+    name: Qwen3.5 and Latxa-Qwen3.5 (2026 decoders) with LoRA
+    category: model
+    note: Qwen/Qwen3.5-*, HiTZ/Latxa-Qwen3.5-2B/4B; Qwen3_5ForSequenceClassification in transformers 5
+  - id: data-augmentation
+    name: Data augmentation for small phrase-level NLI data
+    category: method
+    note: reverse NEG, transitive closure, lexical resources, minimal-pair edits, iSTS answers-students, LLM generation
+
+execution:
+  batch_size: 5
+  items_per_agent: 4
+  output_dir: docs/research/results

@@ -1,123 +1,311 @@
-"""Dataset plumbing for fixed-size feature vectors.
+"""Dataset plumbing for DiCo-NLI phrase pairs.
 
-One example is `(x, label)`: an `(input_dim,)` float32 feature vector and an
-integer class label. Features are stored on disk as `.npz` archives with two
-arrays:
+One example is an ordered phrase pair `(text1, text2)` with an optional gold
+label. Files are the official CSVs:
 
-    X : (N, input_dim) float32
-    y : (N,)           int64
+    participant_labeled   instance_id,pair_id,text1_lang,text2_lang,text1,text2,label
+    participant_unlabeled instance_id,pair_id,text1_lang,text2_lang,text1,text2
+    reference             ... + reverse_pair_id
 
-Replace `FeatureDataset` / `load_npz` when bringing your own input format; the
-rest of the pipeline only needs a `Dataset` yielding `(x, label)` plus the
-`input_dim` / `num_classes` properties.
+Several files can be concatenated (e.g. all four tracks) — instance ids are
+unique across tracks because they embed the language pair.
+
+Tokenization happens in `PairCollator` (dynamic padding), and
+`TwinBatchSampler` keeps an instance and its reversed twin in the same batch so
+the reversal-consistency loss can see both directions.
 """
 
+import csv
+import random
+import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-import numpy as np
 import torch
-from torch.utils.data import Dataset, Subset
+from torch.utils.data import Dataset, Sampler
+
+from src.labels import (
+    LABEL2ID,
+    LABELS,
+    NEGATIVE_OTHER,
+    REVERSIBLE_LABELS,
+    reverse_instance_id,
+    reverse_label,
+)
+
+REQUIRED_COLUMNS = ("instance_id", "pair_id", "text1", "text2")
+PREDICTION_HEADER = ("instance_id", "label")
 
 
-def load_npz(path: str | Path) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Load an `.npz` with `X` / `y` into `(float32 X, int64 y)` tensors."""
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"feature file not found: {path}")
-    with np.load(path) as data:
-        if "X" not in data or "y" not in data:
-            raise ValueError(f"{path} must contain 'X' and 'y' arrays")
-        x = torch.as_tensor(np.asarray(data["X"], dtype=np.float32))
-        y = torch.as_tensor(np.asarray(data["y"], dtype=np.int64))
-    if x.dim() != 2:
-        raise ValueError(f"X must be 2-D (N, input_dim), got shape {tuple(x.shape)}")
-    if y.dim() != 1 or y.shape[0] != x.shape[0]:
-        raise ValueError(
-            f"y must be 1-D with one label per row; got X{tuple(x.shape)} y{tuple(y.shape)}"
-        )
-    return x, y
-
-
-def save_npz(path: str | Path, x, y) -> None:
-    """Write feature/label arrays to an `.npz` archive."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, X=np.asarray(x, dtype=np.float32), y=np.asarray(y, dtype=np.int64))
-
-
-class FeatureDataset(Dataset):
-    def __init__(self, x: torch.Tensor, y: torch.Tensor):
-        if x.shape[0] != y.shape[0]:
-            raise ValueError("x and y must have the same number of rows")
-        self.x = x.float()
-        self.y = y.long()
-
-    def __len__(self) -> int:
-        return self.x.shape[0]
-
-    def __getitem__(self, index: int):
-        return self.x[index], self.y[index]
+@dataclass(frozen=True)
+class DicoExample:
+    instance_id: str
+    pair_id: str
+    text1_lang: str
+    text2_lang: str
+    text1: str
+    text2: str
+    label: Optional[str] = None
 
     @property
-    def input_dim(self) -> int:
-        return int(self.x.shape[1])
+    def label_id(self) -> int:
+        if self.label is None:
+            raise ValueError(f"{self.instance_id} has no gold label")
+        return LABEL2ID[self.label]
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def read_dico_csv(path: str | Path) -> List[DicoExample]:
+    """Read one official DiCo-NLI CSV. `label` is optional (unlabeled/test)."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"DiCo-NLI file not found: {path}")
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        missing = [c for c in REQUIRED_COLUMNS if c not in (reader.fieldnames or [])]
+        if missing:
+            raise ValueError(f"{path} is missing columns: {', '.join(missing)}")
+        has_label = "label" in reader.fieldnames
+        examples = []
+        for row in reader:
+            label = row["label"].strip() if has_label and row["label"] else None
+            if label is not None and label not in LABEL2ID:
+                raise ValueError(f"{path}: unknown label {label!r}")
+            examples.append(
+                DicoExample(
+                    instance_id=row["instance_id"].strip(),
+                    pair_id=row["pair_id"].strip(),
+                    text1_lang=row.get("text1_lang", "").strip(),
+                    text2_lang=row.get("text2_lang", "").strip(),
+                    text1=_clean(row["text1"]),
+                    text2=_clean(row["text2"]),
+                    label=label,
+                )
+            )
+    ids = [ex.instance_id for ex in examples]
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"{path} contains duplicate instance ids")
+    return examples
+
+
+def read_dico_files(paths: Iterable[str | Path]) -> List[DicoExample]:
+    examples: List[DicoExample] = []
+    for path in paths:
+        examples.extend(read_dico_csv(path))
+    ids = [ex.instance_id for ex in examples]
+    if len(set(ids)) != len(ids):
+        raise ValueError("duplicate instance ids across the given files")
+    return examples
+
+
+def write_predictions(
+    path: str | Path, instance_ids: Sequence[str], labels: Sequence[str]
+) -> None:
+    """Write a submission CSV with exactly `instance_id,label`."""
+    if len(instance_ids) != len(labels):
+        raise ValueError("instance_ids and labels must have the same length")
+    for label in labels:
+        if label not in LABEL2ID:
+            raise ValueError(f"invalid label {label!r}")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, lineterminator="\n")
+        writer.writerow(PREDICTION_HEADER)
+        writer.writerows(zip(instance_ids, labels))
+
+
+def twin_indices(examples: Sequence[DicoExample]) -> List[Optional[int]]:
+    """For each example, the index of its reversed twin in `examples` (or None)."""
+    index = {ex.instance_id: i for i, ex in enumerate(examples)}
+    return [index.get(reverse_instance_id(ex.instance_id)) for ex in examples]
+
+
+SYNTHETIC_WORDS = (
+    "the red ship sails north a big dog runs fast old man reads new law "
+    "every child eats some bread in southern city protest against bill"
+).split()
+
+
+def make_synthetic_dico(
+    n_pairs: int = 40,
+    langs: Sequence[Tuple[str, str]] = (("en", "en"),),
+    negative_fraction: float = 0.2,
+    seed: int = 0,
+) -> List[DicoExample]:
+    """Synthetic data with the official structure, for smoke runs and tests.
+
+    Reversible source pairs get an `original` and a `flipped` row per language
+    pair (labels related by Rev); NEGATIVE_OTHER pairs get only `original`.
+    Texts are random words, so the labels are not learnable — this exercises
+    plumbing, not modeling.
+    """
+    rng = random.Random(seed)
+    examples = []
+    for n in range(n_pairs):
+        pair_id = f"dico_synth_{n:07d}"
+        a = " ".join(rng.choices(SYNTHETIC_WORDS, k=rng.randint(1, 4)))
+        b = " ".join(rng.choices(SYNTHETIC_WORDS, k=rng.randint(1, 4)))
+        label = (
+            NEGATIVE_OTHER
+            if rng.random() < negative_fraction
+            else rng.choice(REVERSIBLE_LABELS)
+        )
+        for l1, l2 in langs:
+            examples.append(
+                DicoExample(
+                    f"{pair_id}__{l1}-{l2}__original", pair_id, l1, l2, a, b, label
+                )
+            )
+            if label != NEGATIVE_OTHER:
+                examples.append(
+                    DicoExample(
+                        f"{pair_id}__{l2}-{l1}__flipped",
+                        pair_id,
+                        l2,
+                        l1,
+                        b,
+                        a,
+                        reverse_label(label),
+                    )
+                )
+    return examples
+
+
+def write_dico_csv(path: str | Path, examples: Sequence[DicoExample]) -> None:
+    """Write examples in the participant_labeled layout."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = ("instance_id", "pair_id", "text1_lang", "text2_lang", "text1", "text2")
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, lineterminator="\n")
+        writer.writerow(columns + ("label",))
+        for ex in examples:
+            writer.writerow([getattr(ex, c) for c in columns] + [ex.label or ""])
+
+
+class DicoDataset(Dataset):
+    """Yields the example index; `PairCollator` looks the example up and tokenizes."""
+
+    def __init__(self, examples: Sequence[DicoExample]):
+        self.examples = list(examples)
+        self.twins = twin_indices(self.examples)
+
+    def __len__(self) -> int:
+        return len(self.examples)
+
+    def __getitem__(self, index: int) -> int:
+        return index
+
+    @property
+    def has_labels(self) -> bool:
+        return bool(self.examples) and all(ex.label is not None for ex in self.examples)
 
     @property
     def num_classes(self) -> int:
-        return int(self.y.max().item()) + 1 if len(self) else 0
+        return len(LABELS)
+
+    @property
+    def labels(self) -> torch.Tensor:
+        return torch.tensor([ex.label_id for ex in self.examples], dtype=torch.long)
 
 
-def dataset_from_npz(path: str | Path) -> FeatureDataset:
-    x, y = load_npz(path)
-    return FeatureDataset(x, y)
+class PairCollator:
+    """Tokenize a list of example indices into a padded batch.
 
-
-def make_synthetic_data(
-    n_samples: int = 2000,
-    n_features: int = 32,
-    n_classes: int = 5,
-    n_informative: int = 10,
-    class_sep: float = 1.0,
-    seed: int = 42,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Linearly separable-ish synthetic classification data.
-
-    Used by the smoke test and by anyone who wants to exercise the pipeline
-    before wiring in a real dataset. `sklearn` is imported lazily so the core
-    training path does not require it.
+    Batch keys: input_ids, attention_mask, (token_type_ids), index, twin, and
+    labels when the dataset is labeled. `twin[i]` is the in-batch position of
+    row i's reversed twin, or -1.
     """
-    from sklearn.datasets import make_classification
 
-    x, y = make_classification(
-        n_samples=n_samples,
-        n_features=n_features,
-        n_informative=min(n_informative, n_features),
-        n_redundant=0,
-        n_classes=n_classes,
-        n_clusters_per_class=1,
-        class_sep=class_sep,
-        flip_y=0.01,
-        random_state=seed,
-    )
-    return x.astype(np.float32), y.astype(np.int64)
+    def __init__(self, dataset: DicoDataset, tokenizer, max_length: int = 128):
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __call__(self, indices: List[int]) -> Dict[str, torch.Tensor]:
+        examples = [self.dataset.examples[i] for i in indices]
+        enc = self.tokenizer(
+            [ex.text1 for ex in examples],
+            [ex.text2 for ex in examples],
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        batch = dict(enc)
+        position = {idx: pos for pos, idx in enumerate(indices)}
+        batch["index"] = torch.tensor(indices, dtype=torch.long)
+        batch["twin"] = torch.tensor(
+            [
+                position.get(self.dataset.twins[i], -1)
+                if self.dataset.twins[i] is not None
+                else -1
+                for i in indices
+            ],
+            dtype=torch.long,
+        )
+        if all(ex.label is not None for ex in examples):
+            batch["labels"] = torch.tensor(
+                [ex.label_id for ex in examples], dtype=torch.long
+            )
+        return batch
 
 
-def split_train_val(
-    dataset: FeatureDataset, val_fraction: float, seed: int
-) -> Tuple[Dataset, Dataset | None]:
-    """Deterministic random split into `(train, val)` subsets.
+class TwinBatchSampler(Sampler[List[int]]):
+    """Batches that never split an instance from its reversed twin.
 
-    Returns `(dataset, None)` when `val_fraction <= 0` or the dataset is too
-    small to split. Splits are index-based `Subset`s, so features stay shared.
+    Units are twin pairs or singletons; units are shuffled (when `shuffle`) and
+    packed greedily, so a batch holds `batch_size` or `batch_size - 1` rows.
     """
-    n = len(dataset)
-    if val_fraction <= 0 or n < 2:
-        return dataset, None
-    n_val = max(int(round(n * val_fraction)), 1)
-    n_val = min(n_val, n - 1)
-    g = torch.Generator().manual_seed(seed)
-    perm = torch.randperm(n, generator=g).tolist()
-    val_idx = perm[:n_val]
-    train_idx = perm[n_val:]
-    return Subset(dataset, train_idx), Subset(dataset, val_idx)
+
+    def __init__(
+        self,
+        dataset: DicoDataset,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = 0,
+    ):
+        if batch_size < 2:
+            raise ValueError("batch_size must be >= 2 to keep twins together")
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+        self.epoch = 0
+        seen, units = set(), []
+        for i, j in enumerate(dataset.twins):
+            if i in seen:
+                continue
+            unit = [i] if j is None else [i, j]
+            seen.update(unit)
+            units.append(unit)
+        self.units = units
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def _batches(self) -> List[List[int]]:
+        units = list(self.units)
+        if self.shuffle:
+            random.Random(self.seed + self.epoch).shuffle(units)
+        batches, current = [], []
+        for unit in units:
+            if current and len(current) + len(unit) > self.batch_size:
+                batches.append(current)
+                current = []
+            current.extend(unit)
+        if current:
+            batches.append(current)
+        return batches
+
+    def __iter__(self) -> Iterator[List[int]]:
+        batches = self._batches()
+        self.epoch += 1
+        return iter(batches)
+
+    def __len__(self) -> int:
+        return len(self._batches())

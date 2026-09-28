@@ -5,20 +5,31 @@ Utility entrypoints, grouped by category. Run them from the repo root, e.g.
 
 ```
 scripts/
-├── data/       dataset preparation / synthetic generators
-└── training/   train / evaluate / smoke-test
+├── data/        fetch the task repo, inspect CSV structure
+├── training/    train / evaluate / smoke-test
+└── submission/  official scoring, CodaBench packaging
 ```
 
 ## data/
 
 | Script | Purpose |
 |---|---|
-| `data/make_synthetic.py` | Generate a train/val/test `.npz` feature dataset for smoke runs |
+| `data/fetch_data.py` | Clone/update the official task repo (data, scorer, starter kit) into `data/raw/dico` |
+| `data/inspect_data.py` | Label counts, twin/singleton structure, language pairs, lengths per CSV |
 
 ## training/
 
 | Script | Purpose |
 |---|---|
 | `training/train.py` | Thin wrapper over `src.pipelines.train` (the real CLI) |
-| `training/evaluate.py` | Evaluate a checkpoint on a feature split, optional JSON summary |
-| `training/smoke_test.py` | End-to-end synthetic run: train, evaluate, assert finite metrics |
+| `training/evaluate.py` | Score a checkpoint on labeled files under every decoding mode, optional JSON |
+| `training/smoke_test.py` | End-to-end synthetic run with a tiny offline BERT: train, reload, predict |
+
+## submission/
+
+| Script | Purpose |
+|---|---|
+| `submission/official_score.py` | Run the organizers' scorer (`python -m evaluation_functions`) on a prediction CSV |
+| `submission/make_submission.py` | Validate `track<N>_predictions.csv` against templates and zip them at the archive root |
+
+Predictions themselves come from `uv run python -m src.pipelines.predict`.

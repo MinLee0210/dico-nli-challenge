@@ -1,0 +1,63 @@
+# Tracks 3 (Basque) and 4 (mixed) P0 backbone: XLM-R-large fine-tuned on
+# XNLI, including an epoch of cross-language premise/hypothesis pairs, which
+# matches Track 4. XLM-R-large has the best published Basque NLI numbers among
+# multilingual encoders (XNLIeu). Trained on all four tracks; validation pools
+# every language view of a source pair (`decoding: source`).
+# Needs a >=24 GB GPU (remote training machine).
+
+data_root: data/raw/dico/final_data
+train_files:
+  - train/dico_nli_train_track1_participant_labeled.csv
+  - train/dico_nli_train_track2_participant_labeled.csv
+  - train/dico_nli_train_track3_participant_labeled.csv
+  - train/dico_nli_train_track4_participant_labeled.csv
+val_files:
+  - dev/dico_nli_dev_track1_participant_labeled.csv
+  - dev/dico_nli_dev_track2_participant_labeled.csv
+  - dev/dico_nli_dev_track3_participant_labeled.csv
+  - dev/dico_nli_dev_track4_participant_labeled.csv
+test_files: []
+# Label-safe train-only augmentation (src/augment.py): reverse_negatives, transitive
+augment: []
+seed: 42
+
+ckpt_dir: checkpoints
+result_dir: results
+run_name: null
+
+epochs: 5
+batch_size: 32
+pin_memory: true
+amp: true
+lr: 8.0e-6
+weight_decay: 0.01
+log_every: 100
+eval_every: 1
+ckpt_every: 0
+
+consistency_weight: 0.5
+
+decoding: source
+neg_bias: 0.0
+structural_prior: false
+
+arch:
+  backbone: joeddav/xlm-roberta-large-xnli
+  max_length: 128
+
+lr_scheduler:
+  type: warmup_linear
+  t_max: auto
+  warmup_ratio: 0.1
+early_stopping:
+  enabled: true
+  monitor: dico_mean
+  mode: max
+  patience: 2
+save_best: true
+best_metric: dico_mean
+best_mode: max
+
+wandb:
+  enabled: false
+  project: dico-nli

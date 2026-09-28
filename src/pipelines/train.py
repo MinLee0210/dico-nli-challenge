@@ -1,22 +1,25 @@
-"""MLP training entrypoint.
+"""DiCo-NLI training entrypoint.
 
-Feature classification with a plain cross-entropy loss. Validation is the
-held-out split's accuracy / macro-F1 (optionally its loss). Controlled via a
-YAML config (see configs/train.yaml) with individual CLI overrides. Callbacks
+Fine-tunes a Hugging Face cross-encoder on ordered phrase pairs with
+cross-entropy plus an optional reversal-consistency term. Batches keep each
+instance with its reversed twin. Validation decodes with the configured
+consistency mode and reports Weighted F1 / SoftCons / HardCons. Controlled via
+a YAML config (see configs/train.yaml) with individual CLI overrides. Callbacks
 (LR schedule, early stopping, best checkpoint, W&B) are wired from that file.
 
 Usage:
     uv run python -m src.pipelines.train --config configs/train.yaml
-    uv run python -m src.pipelines.train --config configs/train.yaml --epochs 50 --lr 5e-4
+    uv run python -m src.pipelines.train --config configs/train.yaml --epochs 5 --lr 3e-5
 """
 
 import argparse
+import math
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
 from src.callbacks import (
     BestCheckpoint,
@@ -25,30 +28,66 @@ from src.callbacks import (
     TrainerState,
     build_lr_scheduler,
 )
+from src.augment import augment
 from src.callbacks.wandb_callback import WandbCallback
-from src.config import MLPConfig
-from src.data import dataset_from_npz, split_train_val
-from src.modules.loss import ClassificationLoss
-from src.modules.model import MLPClassifier
+from src.config import ModelConfig
+from src.data import DicoDataset, PairCollator, TwinBatchSampler, read_dico_files
+from src.modules.loss import DicoLoss
+from src.modules.model import PairClassifier, build_tokenizer, model_inputs
 from src.pipelines._utils import announce_training
 from src.pipelines.config import TrainingConfig, load_training_config
-from src.pipelines.eval import eval_per_epoch, format_report
+from src.pipelines.eval import HEADLINE_METRICS, eval_per_epoch, format_report
 from src.utils.io_utils import load_env, save_checkpoint, save_json
 from src.utils.model_utils import detect_device, get_run_name
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-
-def _resolve(data_root: str, name: Optional[str]) -> Optional[Path]:
-    """`<data_root>/<name>` if it exists, else None (optional splits)."""
-    if not name:
-        return None
-    path = Path(data_root) / name
-    return path if path.exists() else None
+# Metrics copied into TrainerState.extra — what callbacks can monitor.
+MONITORED_METRICS = HEADLINE_METRICS + ("dico_mean", "macro_f1", "accuracy")
 
 
-def build_model(model_cfg: MLPConfig, device: torch.device) -> MLPClassifier:
-    return MLPClassifier(model_cfg).to(device)
+def _paths(data_root: str, names: Optional[List[str]]) -> List[Path]:
+    paths = [Path(data_root) / name for name in names or []]
+    missing = [str(p) for p in paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "data files not found (run scripts/data/fetch_data.py?): "
+            + ", ".join(missing)
+        )
+    return paths
+
+
+def build_model(model_cfg: ModelConfig, device: torch.device) -> PairClassifier:
+    return PairClassifier(model_cfg).to(device)
+
+
+def build_optimizer(model: torch.nn.Module, train_cfg: TrainingConfig):
+    """AdamW without weight decay on biases and normalization weights."""
+    decay, no_decay = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        is_norm = "norm" in name.lower() or name.endswith(".bias")
+        (no_decay if is_norm else decay).append(param)
+    return torch.optim.AdamW(
+        [
+            {"params": decay, "weight_decay": train_cfg.weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
+        lr=train_cfg.lr,
+    )
+
+
+def resolve_scheduler_cfg(cfg: Optional[dict], total_steps: int) -> Optional[dict]:
+    """Fill `t_max: auto` and `warmup_ratio` from the run's optimizer steps."""
+    if not cfg:
+        return cfg
+    cfg = dict(cfg)
+    if cfg.get("t_max") == "auto":
+        cfg["t_max"] = total_steps
+    if "warmup_ratio" in cfg:
+        cfg["warmup_steps"] = max(int(cfg.pop("warmup_ratio") * total_steps), 1)
+    return cfg
 
 
 def build_callbacks(
@@ -56,10 +95,13 @@ def build_callbacks(
     optimizer: torch.optim.Optimizer,
     run_name: str,
     wandb_config: dict,
+    total_steps: int,
 ):
     callbacks = []
 
-    lr_cb = build_lr_scheduler(optimizer, train_cfg.lr_scheduler)
+    lr_cb = build_lr_scheduler(
+        optimizer, resolve_scheduler_cfg(train_cfg.lr_scheduler, total_steps)
+    )
     if lr_cb is not None:
         callbacks.append(lr_cb)
 
@@ -79,7 +121,7 @@ def build_callbacks(
         wb = train_cfg.wandb
         callbacks.append(
             WandbCallback(
-                project_name=wb.get("project", "ai-research-template"),
+                project_name=wb.get("project", "dico-nli"),
                 run_name=run_name,
                 config=wandb_config,
                 entity=wb.get("entity"),
@@ -95,68 +137,71 @@ def build_callbacks(
 
 def build_loaders(
     train_cfg: TrainingConfig,
+    tokenizer,
+    max_length: int,
     device: torch.device,
-) -> tuple[DataLoader, Optional[DataLoader], Optional[DataLoader], Dataset]:
-    """Returns (train_loader, val_loader, test_loader, train_dataset).
-
-    Preference order for validation: an explicit `val_file`; otherwise a
-    deterministic split of the train set when `val_fraction > 0`.
-    """
-    train_path = _resolve(train_cfg.data_root, train_cfg.train_file)
-    if train_path is None:
-        raise FileNotFoundError(
-            f"training split not found: {Path(train_cfg.data_root) / train_cfg.train_file}"
-        )
-    train_dataset = dataset_from_npz(train_path)
-
-    val_path = _resolve(train_cfg.data_root, train_cfg.val_file)
-    if val_path is not None:
-        val_dataset: Optional[Dataset] = dataset_from_npz(val_path)
-    else:
-        train_dataset, val_dataset = split_train_val(
-            train_dataset, train_cfg.val_fraction, train_cfg.seed
-        )
-
-    test_path = _resolve(train_cfg.data_root, train_cfg.test_file)
-    test_dataset = dataset_from_npz(test_path) if test_path is not None else None
+) -> tuple[DataLoader, Optional[DataLoader], Optional[DataLoader], DicoDataset]:
+    """Returns (train_loader, val_loader, test_loader, train_dataset)."""
+    train_paths = _paths(train_cfg.data_root, train_cfg.train_files)
+    if not train_paths:
+        raise ValueError("train_files must list at least one file")
+    train_examples = read_dico_files(train_paths)
+    if train_cfg.augment:
+        n = len(train_examples)
+        train_examples = augment(train_examples, train_cfg.augment)
+        print(f"augment {train_cfg.augment}: {n} -> {len(train_examples)} examples")
+    train_dataset = DicoDataset(train_examples)
+    if not train_dataset.has_labels:
+        raise ValueError("training files must be labeled")
 
     pin_memory = train_cfg.pin_memory and device.type == "cuda"
+
+    def eval_loader(names: List[str]) -> Optional[DataLoader]:
+        paths = _paths(train_cfg.data_root, names)
+        if not paths:
+            return None
+        dataset = DicoDataset(read_dico_files(paths))
+        return DataLoader(
+            dataset,
+            batch_size=train_cfg.batch_size * 2,
+            shuffle=False,
+            num_workers=train_cfg.num_workers,
+            pin_memory=pin_memory,
+            collate_fn=PairCollator(dataset, tokenizer, max_length),
+        )
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=train_cfg.batch_size,
-        shuffle=True,
-        drop_last=False,
+        batch_sampler=TwinBatchSampler(
+            train_dataset, train_cfg.batch_size, shuffle=True, seed=train_cfg.seed
+        ),
         num_workers=train_cfg.num_workers,
         pin_memory=pin_memory,
+        collate_fn=PairCollator(train_dataset, tokenizer, max_length),
     )
-    val_loader = (
-        DataLoader(
-            val_dataset,
-            batch_size=train_cfg.batch_size,
-            shuffle=False,
-            num_workers=train_cfg.num_workers,
-            pin_memory=pin_memory,
-        )
-        if val_dataset is not None and len(val_dataset) > 0
-        else None
+    return (
+        train_loader,
+        eval_loader(train_cfg.val_files),
+        eval_loader(train_cfg.test_files),
+        train_dataset,
     )
-    test_loader = (
-        DataLoader(
-            test_dataset,
-            batch_size=train_cfg.batch_size,
-            shuffle=False,
-            num_workers=train_cfg.num_workers,
-            pin_memory=pin_memory,
-        )
-        if test_dataset is not None
-        else None
-    )
-    return train_loader, val_loader, test_loader, train_dataset
 
 
 def _optimizer_step(
-    optimizer, scaler, callbacks, ctx, pending_losses, step, epoch, log_every
+    model,
+    optimizer,
+    scaler,
+    callbacks,
+    ctx,
+    pending_losses,
+    step,
+    epoch,
+    log_every,
+    max_grad_norm,
 ):
+    if max_grad_norm and max_grad_norm > 0:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
     scaler.step(optimizer)
     scaler.update()
     optimizer.zero_grad()
@@ -166,7 +211,8 @@ def _optimizer_step(
     for cb in callbacks:
         cb.on_step_end(ctx, state)
     if step % log_every == 0 or step == 1:
-        print(f"  epoch {epoch:3d}  step {step:5d}  loss={avg_loss:.4f}")
+        lr = optimizer.param_groups[0]["lr"]
+        print(f"  epoch {epoch:3d}  step {step:5d}  loss={avg_loss:.4f}  lr={lr:.2e}")
     return step, avg_loss
 
 
@@ -183,32 +229,51 @@ def train_per_epoch(
     step,
     epoch,
     log_every,
+    max_grad_norm=1.0,
 ):
     model.train()
     epoch_losses, pending = [], []
     optimizer.zero_grad()
 
-    for x, labels in loader:
-        x = x.float().to(device)
-        labels = labels.reshape(-1).long().to(device)
+    for batch in loader:
+        labels = batch["labels"].to(device)
+        twin = batch["twin"].to(device)
 
         with torch.autocast(device_type=device.type, enabled=scaler.is_enabled()):
-            logits, _ = model(x)
-            loss = criterion(logits, labels)
+            logits, _ = model(**model_inputs(batch, device))
+            loss = criterion(logits.float(), labels, twin)
 
         scaler.scale(loss / accum_steps).backward()
         pending.append(loss.item())
 
         if len(pending) == accum_steps:
             step, avg_loss = _optimizer_step(
-                optimizer, scaler, callbacks, ctx, pending, step, epoch, log_every
+                model,
+                optimizer,
+                scaler,
+                callbacks,
+                ctx,
+                pending,
+                step,
+                epoch,
+                log_every,
+                max_grad_norm,
             )
             epoch_losses.append(avg_loss)
             pending = []
 
     if pending:
         step, avg_loss = _optimizer_step(
-            optimizer, scaler, callbacks, ctx, pending, step, epoch, log_every
+            model,
+            optimizer,
+            scaler,
+            callbacks,
+            ctx,
+            pending,
+            step,
+            epoch,
+            log_every,
+            max_grad_norm,
         )
         epoch_losses.append(avg_loss)
 
@@ -218,8 +283,15 @@ def train_per_epoch(
     )
 
 
-def train(train_cfg: TrainingConfig):
-    load_env(REPO_ROOT / ".env")  # WANDB_API_KEY for callbacks
+def train(
+    train_cfg: TrainingConfig,
+    model: Optional[PairClassifier] = None,
+    tokenizer=None,
+):
+    """Run training. `model` / `tokenizer` may be injected (tests, smoke run);
+    otherwise they are built from `train_cfg.arch` over ModelConfig defaults.
+    """
+    load_env(REPO_ROOT / ".env")  # WANDB_API_KEY / HF token for callbacks
     device = detect_device()
     print(f"device: {device}")
 
@@ -229,40 +301,44 @@ def train(train_cfg: TrainingConfig):
     elif device.type == "mps":
         torch.mps.manual_seed(train_cfg.seed)
 
+    model_cfg = (
+        model.cfg if model is not None else ModelConfig(**(train_cfg.arch or {}))
+    )
+    tokenizer = tokenizer if tokenizer is not None else build_tokenizer(model_cfg)
     train_loader, val_loader, test_loader, train_dataset = build_loaders(
-        train_cfg, device
+        train_cfg, tokenizer, model_cfg.max_length, device
     )
-    num_classes = train_dataset.num_classes
-    input_dim = train_dataset.input_dim
-    print(f"classes: {num_classes}  input_dim: {input_dim}")
+    print(f"train examples: {len(train_dataset)}  backbone: {model_cfg.backbone}")
 
-    model_cfg = MLPConfig(
-        input_dim=input_dim,
-        num_classes=num_classes,
-        **(train_cfg.arch or {}),
-    )
-    model = build_model(model_cfg, device)
-    criterion = ClassificationLoss().to(device)
-
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay
-    )
+    model = model.to(device) if model is not None else build_model(model_cfg, device)
+    criterion = DicoLoss(
+        label_smoothing=train_cfg.label_smoothing,
+        consistency_weight=train_cfg.consistency_weight,
+    ).to(device)
+    optimizer = build_optimizer(model, train_cfg)
     scaler = torch.amp.GradScaler(
         "cuda" if device.type == "cuda" else "cpu",
         enabled=(train_cfg.amp and device.type == "cuda"),
     )
 
     run_name = train_cfg.run_name or get_run_name(
-        "mlp",
-        Path(train_cfg.data_root).name,
+        Path(model_cfg.backbone).name,
+        "dico",
         train_cfg.lr,
         train_cfg.batch_size,
     )
     ckpt_dir = Path(train_cfg.ckpt_dir) / run_name
     result_dir = Path(train_cfg.result_dir) / run_name
 
+    total_steps = train_cfg.epochs * math.ceil(
+        len(train_loader) / max(train_cfg.accum_steps, 1)
+    )
     callbacks = build_callbacks(
-        train_cfg, optimizer, run_name, {**asdict(model_cfg), **asdict(train_cfg)}
+        train_cfg,
+        optimizer,
+        run_name,
+        {**asdict(model_cfg), **asdict(train_cfg)},
+        total_steps,
     )
     early_stoppers = [cb for cb in callbacks if isinstance(cb, EarlyStopping)]
 
@@ -304,8 +380,14 @@ def train(train_cfg: TrainingConfig):
         result_dir=result_dir,
     )
 
+    decode_kwargs = dict(
+        decoding=train_cfg.decoding,
+        neg_bias=train_cfg.neg_bias,
+        structural_prior=train_cfg.structural_prior,
+    )
     history = []
     stopped_early = False
+    epoch = start_epoch
     for epoch in range(start_epoch, train_cfg.epochs + 1):
         train_loss, step = train_per_epoch(
             model,
@@ -320,6 +402,7 @@ def train(train_cfg: TrainingConfig):
             step,
             epoch,
             train_cfg.log_every,
+            train_cfg.max_grad_norm,
         )
         record = {"epoch": epoch, "step": step, "loss": train_loss}
         print(f"epoch {epoch:3d}/{train_cfg.epochs}  train_loss={train_loss:.4f}")
@@ -328,35 +411,24 @@ def train(train_cfg: TrainingConfig):
         if should_validate:
             val_result = (
                 eval_per_epoch(
-                    model,
-                    val_loader,
-                    device,
-                    num_classes=num_classes,
-                    criterion=criterion,
+                    model, val_loader, device, criterion=criterion, **decode_kwargs
                 )
                 if val_loader is not None
                 else None
             )
             # Report the test split when present, else fall back to the val
-            # split so a run without a held-out test still has metrics.
+            # split so a run without an extra labeled split still has metrics.
             metric_result = (
                 eval_per_epoch(
-                    model,
-                    test_loader,
-                    device,
-                    num_classes=num_classes,
-                    criterion=criterion,
+                    model, test_loader, device, criterion=criterion, **decode_kwargs
                 )
                 if test_loader is not None
                 else val_result
             )
             extra = {}
             if metric_result is not None:
-                extra = {
-                    "accuracy": metric_result["accuracy"],
-                    "f1": metric_result["f1"],
-                    "metric_loss": metric_result["loss"],
-                }
+                extra = {k: metric_result[k] for k in MONITORED_METRICS}
+                extra["metric_loss"] = metric_result["loss"]
                 record.update(extra)
                 print(format_report(metric_result))
             state = TrainerState(
@@ -374,7 +446,11 @@ def train(train_cfg: TrainingConfig):
 
         history.append(record)
 
-        if epoch % train_cfg.ckpt_every == 0 or epoch == train_cfg.epochs:
+        periodic = train_cfg.ckpt_every > 0 and epoch % train_cfg.ckpt_every == 0
+        final_without_best = not train_cfg.save_best and (
+            epoch == train_cfg.epochs or stopped_early
+        )
+        if periodic or final_without_best:
             ckpt_path = ckpt_dir / f"epoch_{epoch}.pt"
             save_checkpoint(
                 model,
@@ -410,9 +486,10 @@ if __name__ == "__main__":
         "--config", type=Path, default=None, help="YAML, see configs/train.yaml"
     )
     parser.add_argument("--data_root", type=str, default=None)
-    parser.add_argument("--train_file", type=str, default=None)
-    parser.add_argument("--val_file", type=str, default=None)
-    parser.add_argument("--test_file", type=str, default=None)
+    parser.add_argument("--train_files", type=str, nargs="+", default=None)
+    parser.add_argument("--val_files", type=str, nargs="+", default=None)
+    parser.add_argument("--test_files", type=str, nargs="+", default=None)
+    parser.add_argument("--augment", type=str, nargs="*", default=None)
     parser.add_argument("--ckpt_dir", type=str, default=None)
     parser.add_argument("--result_dir", type=str, default=None)
     parser.add_argument("--run_name", type=str, default=None)
@@ -422,10 +499,17 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
+    parser.add_argument("--max_grad_norm", type=float, default=None)
     parser.add_argument("--log_every", type=int, default=None)
     parser.add_argument("--eval_every", type=int, default=None)
     parser.add_argument("--ckpt_every", type=int, default=None)
-    parser.add_argument("--val_fraction", type=float, default=None)
+    parser.add_argument("--label_smoothing", type=float, default=None)
+    parser.add_argument("--consistency_weight", type=float, default=None)
+    parser.add_argument(
+        "--decoding", type=str, default=None, choices=["independent", "twin", "source"]
+    )
+    parser.add_argument("--neg_bias", type=float, default=None)
+    parser.add_argument("--structural_prior", action="store_true", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--amp", action="store_true", default=None)

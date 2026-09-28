@@ -1,0 +1,54 @@
+{
+  "name": "XLM-RoBERTa base/large + XNLI checkpoints (joeddav/xlm-roberta-large-xnli et al.) + BAAI/bge-reranker-v2-m3",
+  "category": "model",
+  "links": {
+    "paper": "Conneau et al., 'Unsupervised Cross-lingual Representation Learning at Scale' (XLM-R; arXiv:1911.02116, ACL 2020); Chen et al., 'BGE M3-Embedding' (arXiv:2402.03216) for the bge-m3 backbone of bge-reranker-v2-m3; Heredia et al., 'XNLIeu' (arXiv:2404.06996, NAACL 2024); 'Lost in Variation?' (arXiv:2506.15239)",
+    "hf_models": [
+      "FacebookAI/xlm-roberta-base",
+      "FacebookAI/xlm-roberta-large",
+      "joeddav/xlm-roberta-large-xnli",
+      "vicgalle/xlm-roberta-large-xnli-anli",
+      "symanto/xlm-roberta-base-snli-mnli-anli-xnli",
+      "BAAI/bge-reranker-v2-m3",
+      "HiTZ/xnli-eu (dataset)"
+    ],
+    "code": [
+      "https://github.com/facebookresearch/fairseq/tree/main/examples/xlmr",
+      "https://github.com/FlagOpen/FlagEmbedding",
+      "https://github.com/hitz-zentroa/xnli-eu"
+    ]
+  },
+  "year": "XLM-R 2019; joeddav XNLI checkpoint 2020; bge-reranker-v2-m3 2024",
+  "license_access": "Open-weight. XLM-R MIT; joeddav/xlm-roberta-large-xnli MIT; bge-reranker-v2-m3 Apache-2.0. vicgalle/symanto variants: check individual cards (ANLI is CC-BY-NC).",
+  "track_coverage": "T1 (EN), T2 (ES), T3 (EU), T4 (mixed). XLM-R-large is the best-documented multilingual encoder for Basque NLI and the natural single backbone for T2-T4; on T1 it is expected to trail English DeBERTa-v3-large.",
+  "basque_quality": "Best-evidenced among multilingual encoders in this survey. Basque is in CC-100. XNLIeu (Heredia et al. 2024): XLM-R-large 81.1 zero-shot / 83.8 translate-train (XNLIeu), 75.4 / 79.9 (XNLIeu-MT), 73.8 / 76.4 (native Basque test); XLM-R-base 73.4 zero-shot (vs mBERT 60.1, IXAmBERT 72.5); monolingual RoBERTa-euscrawl 83.0 translate-train (slightly below XLM-R-large). 'Lost in Variation' (2025): XLM-R-large 80.00 / 83.42 on XNLIeu and 68.24 / 73.21 on Basque variants, beating mDeBERTa (78.95 / 81.42) in every Basque condition. bge-reranker-v2-m3 inherits XLM-R-large's Basque coverage via bge-m3, but its retrieval fine-tuning data is dominated by high-resource languages; no Basque numbers published. [uncertain for bge]",
+  "cross_lingual_robustness": "XLM-R-large: XNLI EN ~89 vs cross-lingual average ~80.9 (zero-shot transfer), i.e. monolingual transfer gaps of 4-10 points depending on language; ES gap small (~4 pts), Basque larger (~8 pts zero-shot, ~5 pts translate-train). joeddav/xlm-roberta-large-xnli was additionally trained for one epoch on XNLI with premise and hypothesis in shuffled (different) languages, which directly matches Track 4 mixed-language pairs - a distinctive advantage. bge-reranker-v2-m3 is trained for cross-lingual query-passage relevance, so it is robust to mixed-language inputs for relatedness, but has no directional signal. [uncertain]",
+  "architecture": "Encoder-only RoBERTa-style transformer (MLM, no NSP), 250k SentencePiece vocab, pretrained on CC-100 (2.5 TB, 100 languages). base: 12 layers, hidden 768; large: 24 layers, hidden 1024. XNLI checkpoints add a 3-way NLI head (joeddav: MNLI train + XNLI dev/test, plus a cross-language shuffled epoch). bge-reranker-v2-m3: XLM-R-large-sized cross-encoder initialized from bge-m3 (XLM-R extended to 8192 positions with RetroMAE + multilingual contrastive training), fine-tuned as a reranker that outputs a single relevance logit; max length 512 in the reranker recipe. For DiCo all are used as XLMRobertaForSequenceClassification with a fresh 4-way head.",
+  "params": "XLM-R-base ~270-278M (large share in the 250k x 768 embedding); XLM-R-large ~550-560M; bge-reranker-v2-m3 ~568M (0.6B).",
+  "compute": "XLM-R-large / bge-reranker-v2-m3: fit a single 24 GB GPU for fine-tuning at max_len 64, batch 16-32 in bf16 (~10-20 min per run on an A100 for a monolingual track; T4 with ~18k rows roughly 6x). Multi-seed x 5-fold ensembles over T1-T4 are tens of GPU-hours at most. XLM-R-base is trivial. [uncertain]",
+  "sample_efficiency": "XLM-R-large is notoriously unstable when fine-tuned on small datasets from the raw checkpoint (some seeds fail to converge or collapse to the majority class); with ~1.3k reversible source pairs use lr ~1e-5 (XNLIeu used 1e-5 for RoBERTa-type models, 10 epochs, 3 seeds), warmup, and discard collapsed seeds. Starting from joeddav/xlm-roberta-large-xnli (NLI-intermediate) should markedly stabilize training and speed convergence. bge-reranker-v2-m3 starts from a relatedness-tuned head (useful for NEG vs related) but its 1-logit head must be re-initialized to 4 classes. XLM-R-base is stable but weaker. [uncertain]",
+  "reported_results": "XLM-R paper: XNLI cross-lingual transfer average base 76.2, large 80.9; large MNLI-m ~89.1 [uncertain]. XNLIeu (Heredia et al. 2024; 3 seeds, 10 epochs): zero-shot XLM-R-base 73.4 / XLM-R-large 81.1 (XNLIeu), 69.0 / 75.4 (XNLIeu-MT), 65.3 / 73.8 (native); translate-train XLM-R-large 83.8 / 79.9 / 76.4, RoBERTa-euscrawl 83.0 / 78.6 / 75.2, BERTeus 79.0 / 74.9 / 68.4; Latxa-7B zero-shot prompting only 50.9. 'Lost in Variation' (2025): XLM-R-large XNLIeu 80.00 (transfer) / 83.42 (translate-train), XNLI-es 83.05 / 84.69; Basque variants 68.24 / 73.21, Spanish variants 73.07 / 73.72. joeddav/xlm-roberta-large-xnli: MNLI + XNLI dev+test training, ~1.95M downloads, no accuracy table (its XNLI test numbers would be contaminated). bge-reranker-v2-m3: strong on BEIR, C-MTEB retrieval, MIRACL (multilingual) reranking; no NLI numbers. Monolingual RoBERTa proxy in the DiCo pilot (Positives-A): RoBERTa-base F1 0.70 / unseen SoftCoh 0.77 / HardCoh 0.72; RoBERTa-large 0.71 / 0.76 / 0.71.",
+  "pilot_dico_results": "Not evaluated in the LREC 2026 pilot (English-only; RoBERTa base/large, the monolingual architecture twin, reached Positives-A F1 0.70 / 0.71, unseen SoftCoh 0.77 / 0.76, unseen HardCoh 0.72 / 0.71, below DeBERTa-v3-base 0.75 / 0.84 / 0.79).",
+  "consistency_guarantee": "none (plain cross-encoders); inference-time consistency via symmetric scoring / joint pair decoding and cross-view pooling.",
+  "negative_other_handling": "4th softmax class; can emit NEG on one side of a reversible pair. XNLI checkpoints give a bidirectional-entailment prior (EQ both directions, FE/BE one direction, NEG neither/contradiction). bge-reranker-v2-m3's pretrained relevance score is a natural feature for the related-vs-NEGATIVE_OTHER gate (UNR pairs score low), but SIMI/REL pairs are topically related and will score high, so it cannot separate those NEG sub-types from EQ/FE/BE on its own; it is symmetric-ish by design and provides no direction information. [uncertain]",
+  "metric_tradeoff": "XLM-R-large fine-tuned from the XNLI checkpoint should give the best Weighted F1 on T3 and competitive F1 on T2/T4; on T1 a few points below DeBERTa-v3-large. As with any cross-encoder, SoftCons depends on symmetric decoding; the cross-language-shuffled NLI training should reduce disagreement between language views, helping view pooling and HardCons on T4. bge-reranker-v2-m3 as a standalone 4-way classifier is expected to be weaker on direction (FE vs BE) and thus on HardCons; best used as an ensemble member or NEG-gate feature. [uncertain]",
+  "integration": "AutoModelForSequenceClassification.from_pretrained('joeddav/xlm-roberta-large-xnli' | 'FacebookAI/xlm-roberta-large' | 'BAAI/bge-reranker-v2-m3', num_labels=4, ignore_mismatched_sizes=True) + AutoTokenizer; pair encoding '<s> p1 </s></s> p2 </s>'. Note joeddav label order is contradiction/neutral/entailment (check config id2label) if reusing the NLI head zero-shot. For bge, optionally keep the original 1-logit relevance head as an auxiliary NEG-gate feature (FlagReranker compute_score or the raw logit) before swapping in the 4-way head. Train jointly on all tracks, grouped by pair_id; apply REVERSE_PERM symmetric scoring and cross-view pooling.",
+  "ensemble_compatibility": "Yes for XLM-R (softmax probabilities; temperature scaling recommended). bge-reranker-v2-m3 as-is gives a single relevance logit (usable as a gate feature, not per-class probabilities) until fine-tuned with a 4-way head.",
+  "inference_cost": "Low: ~4k rows x 2 directions per monolingual track in well under a minute with XLM-R-large or bge-reranker-v2-m3 on one GPU; T4 (~6x rows) a few minutes; XLM-R-base seconds.",
+  "rules_disclosure": "Disclose: open-weight; encoder-only (XLM-R / bge-m3-based cross-encoder); fine-tuned; external data embedded in checkpoints (joeddav: MNLI + XNLI dev/test; vicgalle: + ANLI; symanto: SNLI+MNLI+ANLI+XNLI; bge-reranker-v2-m3: bge-m3 data, Quora, FEVER and other retrieval data); XNLIeu if used; any MT used.",
+  "contamination": "CC-100 pretraining may include source headlines/captions (no phrase labels). joeddav trained on XNLI test (irrelevant to DiCo but disqualifies it for XNLI-based model selection). bge-reranker-v2-m3 training includes FEVER and broad retrieval data; no known PhrasIS/iSTS inclusion, but the mixture is only partially documented [uncertain]. Pending PhrasIS policy applies to direct use of public PhrasIS labels.",
+  "structural_cue_dependence": "None intrinsically. Cross-view pooling (a method, not the model) depends on pair_id being shared across tracks in test metadata.",
+  "priority": "P0",
+  "expected_gain": "P0 for Track 3 (Basque) and Track 4 (mixed), strong P1 for Track 2: XLM-R-large has the best published Basque NLI numbers among multilingual encoders (~1-3.5 points over mDeBERTa on XNLIeu) and joeddav's cross-language shuffled NLI training aligns with T4. Expect it to be the best single multilingual backbone, with seed instability as the main risk (mitigate via NLI-initialized checkpoint, low lr, seed filtering, fold ensembles). bge-reranker-v2-m3 is P2: a diverse ensemble member / NEG-gate feature rather than a primary classifier. XLM-R-base only as a fast sanity baseline. [uncertain]",
+  "uncertain": [
+    "basque_quality",
+    "cross_lingual_robustness",
+    "compute",
+    "sample_efficiency",
+    "reported_results",
+    "negative_other_handling",
+    "metric_tradeoff",
+    "contamination",
+    "expected_gain"
+  ]
+}

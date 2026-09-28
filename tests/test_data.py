@@ -1,79 +1,103 @@
-import numpy as np
 import pytest
 import torch
 
 from src.data import (
-    FeatureDataset,
-    dataset_from_npz,
-    load_npz,
-    make_synthetic_data,
-    save_npz,
-    split_train_val,
+    DicoDataset,
+    PairCollator,
+    TwinBatchSampler,
+    make_synthetic_dico,
+    read_dico_csv,
+    read_dico_files,
+    twin_indices,
+    write_dico_csv,
+    write_predictions,
 )
+from src.labels import NEGATIVE_OTHER, reverse_label
 
 
-def test_make_synthetic_data_shapes():
-    x, y = make_synthetic_data(n_samples=50, n_features=8, n_classes=3, seed=0)
-    assert x.shape == (50, 8)
-    assert y.shape == (50,)
-    assert x.dtype == np.float32
-    assert set(np.unique(y)) <= {0, 1, 2}
+def test_synthetic_structure_matches_official():
+    examples = make_synthetic_dico(
+        n_pairs=50, langs=(("en", "es"), ("es", "en")), seed=0
+    )
+    twins = twin_indices(examples)
+    for ex, t in zip(examples, twins):
+        if ex.label == NEGATIVE_OTHER:
+            assert t is None
+        else:
+            assert t is not None
+            assert examples[t].label == reverse_label(ex.label)
 
 
-def test_save_load_roundtrip(tmp_path):
-    x, y = make_synthetic_data(n_samples=20, n_features=5, n_classes=2, seed=1)
-    path = tmp_path / "split.npz"
-    save_npz(path, x, y)
-    x2, y2 = load_npz(path)
-    assert x2.shape == x.shape and y2.shape == y.shape
-    assert x2.dtype == torch.float32 and y2.dtype == torch.int64
-    assert torch.allclose(x2, torch.as_tensor(x))
+def test_csv_roundtrip(tmp_path):
+    examples = make_synthetic_dico(n_pairs=10, seed=1)
+    path = tmp_path / "train.csv"
+    write_dico_csv(path, examples)
+    assert read_dico_csv(path) == examples
 
 
-def test_feature_dataset_properties():
-    x = torch.randn(10, 7)
-    y = torch.tensor([0, 1, 2] * 3 + [2])
-    ds = FeatureDataset(x, y)
-    assert len(ds) == 10
-    assert ds.input_dim == 7
-    assert ds.num_classes == 3
-    xi, yi = ds[0]
-    assert xi.shape == (7,) and yi.dim() == 0
+def test_read_unlabeled_file(tmp_path):
+    path = tmp_path / "test.csv"
+    path.write_text(
+        "instance_id,pair_id,text1_lang,text2_lang,text1,text2\n"
+        "p__en-en__original,p,en,en,  a   dog ,dog\n"
+    )
+    [ex] = read_dico_csv(path)
+    assert ex.label is None
+    assert ex.text1 == "a dog"
+    assert not DicoDataset([ex]).has_labels
 
 
-def test_dataset_from_npz(tmp_path):
-    x, y = make_synthetic_data(n_samples=30, n_features=6, n_classes=2, seed=2)
-    path = tmp_path / "t.npz"
-    save_npz(path, x, y)
-    ds = dataset_from_npz(path)
-    assert len(ds) == 30
-
-
-def test_split_train_val_deterministic():
-    x = torch.randn(100, 4)
-    y = torch.randint(0, 2, (100,))
-    ds = FeatureDataset(x, y)
-    train1, val1 = split_train_val(ds, 0.2, seed=0)
-    train2, val2 = split_train_val(ds, 0.2, seed=0)
-    assert val1 is not None and len(val1) == 20
-    assert len(train1) == 80
-    assert sorted(val1.indices) == sorted(val2.indices)
-
-
-def test_split_train_val_disabled():
-    ds = FeatureDataset(torch.randn(10, 4), torch.zeros(10, dtype=torch.long))
-    train, val = split_train_val(ds, 0.0, seed=0)
-    assert val is None
-    assert len(train) == 10
+def test_read_rejects_bad_label_and_duplicates(tmp_path):
+    path = tmp_path / "bad.csv"
+    path.write_text(
+        "instance_id,pair_id,text1,text2,label\np__en-en__original,p,a,b,CONTRADICTION\n"
+    )
+    with pytest.raises(ValueError):
+        read_dico_csv(path)
+    dup = tmp_path / "dup.csv"
+    write_dico_csv(dup, make_synthetic_dico(n_pairs=3, seed=0))
+    with pytest.raises(ValueError):
+        read_dico_files([dup, dup])
 
 
 def test_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
-        load_npz(tmp_path / "nope.npz")
+        read_dico_csv(tmp_path / "nope.csv")
 
 
-def test_bad_arrays_raise(tmp_path):
-    path = tmp_path / "bad.npz"
-    np.savez(path, X=np.zeros((4, 3), dtype=np.float32))
+def test_write_predictions_format(tmp_path):
+    path = tmp_path / "track1_predictions.csv"
+    write_predictions(path, ["a__en-en__original"], ["EQUIVALENCE"])
+    assert path.read_text() == "instance_id,label\na__en-en__original,EQUIVALENCE\n"
     with pytest.raises(ValueError):
-        load_npz(path)
+        write_predictions(path, ["a"], ["bogus"])
+
+
+def test_twin_batch_sampler_keeps_twins_together():
+    dataset = DicoDataset(make_synthetic_dico(n_pairs=40, seed=2))
+    sampler = TwinBatchSampler(dataset, batch_size=5, shuffle=True, seed=0)
+    batches = list(sampler)
+    seen = [i for b in batches for i in b]
+    assert sorted(seen) == list(range(len(dataset)))
+    for batch in batches:
+        assert len(batch) <= 5
+        members = set(batch)
+        for i in batch:
+            twin = dataset.twins[i]
+            assert twin is None or twin in members
+
+
+def test_collator_builds_twin_positions(tiny_tokenizer):
+    dataset = DicoDataset(make_synthetic_dico(n_pairs=10, seed=3))
+    collator = PairCollator(dataset, tiny_tokenizer, max_length=16)
+    batch = collator(list(range(len(dataset))))
+    assert batch["input_ids"].shape[0] == len(dataset)
+    assert batch["labels"].tolist() == dataset.labels.tolist()
+    for pos, twin in enumerate(batch["twin"].tolist()):
+        expected = dataset.twins[pos]
+        assert twin == (-1 if expected is None else expected)
+    # twin outside the batch -> -1
+    first_with_twin = next(i for i, t in enumerate(dataset.twins) if t is not None)
+    lone = collator([first_with_twin])
+    assert lone["twin"].tolist() == [-1]
+    assert lone["input_ids"].dtype == torch.long

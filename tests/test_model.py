@@ -1,66 +1,41 @@
 import pytest
 import torch
 
-from src.config import MLPConfig
-from src.modules.model import MLPBackbone, MLPClassifier
-
-B, INPUT_DIM, NUM_CLASSES = 8, 16, 4
-
-
-def make_cfg(**overrides) -> MLPConfig:
-    base = dict(input_dim=INPUT_DIM, num_classes=NUM_CLASSES)
-    base.update(overrides)
-    return MLPConfig(**base)
+from src.config import ModelConfig
+from src.data import DicoDataset, PairCollator, make_synthetic_dico
+from src.labels import NUM_LABELS
+from src.modules.model import model_inputs
 
 
-def test_forward_shapes():
-    cfg = make_cfg()
-    model = MLPClassifier(cfg).eval()
-    x = torch.randn(B, INPUT_DIM)
+def test_forward_shapes(tiny_model, tiny_tokenizer):
+    dataset = DicoDataset(make_synthetic_dico(n_pairs=6, seed=0))
+    batch = PairCollator(dataset, tiny_tokenizer, 32)(list(range(len(dataset))))
     with torch.no_grad():
-        logits, feature = model(x)
-    assert logits.shape == (B, NUM_CLASSES)
-    assert feature.shape == (B, cfg.embed_dim)
+        logits, feature = tiny_model(**model_inputs(batch, torch.device("cpu")))
+    assert logits.shape == (len(dataset), NUM_LABELS)
+    assert feature.shape == (len(dataset), tiny_model.hf.config.hidden_size)
     assert torch.isfinite(logits).all()
 
 
-def test_forward_accepts_optional_label():
-    model = MLPClassifier(make_cfg()).eval()
-    x = torch.randn(B, INPUT_DIM)
-    labels = torch.randint(0, NUM_CLASSES, (B,))
-    with torch.no_grad():
-        logits, _ = model(x, labels)
-    assert logits.shape == (B, NUM_CLASSES)
+def test_model_inputs_filters_batch_keys():
+    batch = {
+        "input_ids": torch.zeros(2, 3, dtype=torch.long),
+        "attention_mask": torch.ones(2, 3, dtype=torch.long),
+        "labels": torch.zeros(2, dtype=torch.long),
+        "twin": torch.zeros(2, dtype=torch.long),
+    }
+    assert set(model_inputs(batch, torch.device("cpu"))) == {
+        "input_ids",
+        "attention_mask",
+    }
 
 
-def test_embedding_matches_forward_feature():
-    model = MLPClassifier(make_cfg()).eval()
-    x = torch.randn(B, INPUT_DIM)
-    with torch.no_grad():
-        _, feature = model(x)
-        embedding = model.get_embedding(x)
-    assert torch.allclose(feature, embedding)
-
-
-def test_empty_hidden_dims_is_linear_projection():
-    cfg = make_cfg(hidden_dims=())
-    backbone = MLPBackbone(cfg).eval()
-    x = torch.randn(B, INPUT_DIM)
-    with torch.no_grad():
-        out = backbone(x)
-    assert out.shape == (B, cfg.embed_dim)
-
-
-def test_missing_num_classes_raises():
+def test_config_validation():
     with pytest.raises(ValueError):
-        MLPClassifier(make_cfg(num_classes=0))
-
-
-def test_config_rejects_invalid_dropout():
+        ModelConfig(backbone="")
     with pytest.raises(ValueError):
-        make_cfg(dropout=1.0)
-
-
-def test_config_rejects_unknown_activation():
+        ModelConfig(num_labels=3)
     with pytest.raises(ValueError):
-        make_cfg(activation="swish")
+        ModelConfig(classifier_dropout=1.0)
+    assert ModelConfig(backbone="x").tokenizer_name == "x"
+    assert ModelConfig(backbone="x", tokenizer="y").tokenizer_name == "y"

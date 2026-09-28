@@ -1,0 +1,96 @@
+# Field definitions for the DiCo-NLI approach survey.
+# detail_level: brief -> moderate -> detailed
+
+fields:
+  basic:
+    - name: name
+      description: Canonical name of the model or method
+      detail_level: brief
+    - name: category
+      description: model | method
+      detail_level: brief
+    - name: links
+      description: Paper, HF model ids, code repos
+      detail_level: brief
+    - name: year
+      description: Release / publication year
+      detail_level: brief
+    - name: license_access
+      description: License and access regime (open-weight, API, closed)
+      detail_level: brief
+
+  applicability:
+    - name: track_coverage
+      description: Which tracks it applies to (T1 EN, T2 ES, T3 EU, T4 mixed)
+      detail_level: brief
+    - name: basque_quality
+      description: Evidence of Basque competence (covered? benchmark numbers)
+      detail_level: moderate
+    - name: cross_lingual_robustness
+      description: Expected gap between monolingual and mixed-language inputs
+      detail_level: moderate
+
+  technical:
+    - name: architecture
+      description: Architecture family and key design (encoder / decoder / enc-dec / method mechanics)
+      detail_level: moderate
+    - name: params
+      description: Parameter count(s)
+      detail_level: brief
+    - name: compute
+      description: GPU memory / time to fine-tune or run on the remote training machine (e.g. fits 24 GB? needs 80 GB / multi-GPU?)
+      detail_level: moderate
+    - name: sample_efficiency
+      description: Behavior with ~1.3k reversible source pairs; seed variance
+      detail_level: moderate
+
+  evidence:
+    - name: reported_results
+      description: Relevant numbers (MNLI/XNLI/XNLIeu, pilot DiCo scores, phrase-level NLI)
+      detail_level: detailed
+    - name: pilot_dico_results
+      description: Results in the LREC 2026 pilot, if evaluated
+      detail_level: moderate
+
+  consistency:
+    - name: consistency_guarantee
+      description: none | soft (loss) | inference-time (decoding) | architectural
+      detail_level: brief
+    - name: negative_other_handling
+      description: How NEGATIVE_OTHER is decided; can it emit NEG on reversible pairs?
+      detail_level: moderate
+    - name: metric_tradeoff
+      description: Expected effect on Weighted F1 vs SoftCons vs HardCons
+      detail_level: moderate
+
+  implementation:
+    - name: integration
+      description: How to plug into this repo (HF AutoModelForSequenceClassification, custom head, decoding step)
+      detail_level: moderate
+    - name: ensemble_compatibility
+      description: Produces calibrated per-class probabilities usable by joint decoding / pooling?
+      detail_level: brief
+    - name: inference_cost
+      description: Cost/time to label the test set (~4k rows x views)
+      detail_level: brief
+
+  risks:
+    - name: rules_disclosure
+      description: Mandatory disclosure metadata (access regime, arch family, external data) and rule risks
+      detail_level: moderate
+    - name: contamination
+      description: Overlap with PhrasIS / iSTS / pretraining data; pending PhrasIS policy
+      detail_level: moderate
+    - name: structural_cue_dependence
+      description: Does it rely on pair_id / singleton heuristics? behavior if test metadata differs
+      detail_level: brief
+
+  recommendation:
+    - name: priority
+      description: P0 (do first) | P1 | P2
+      detail_level: brief
+    - name: expected_gain
+      description: Expected gain and rationale
+      detail_level: moderate
+
+uncertain: []

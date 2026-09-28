@@ -1,14 +1,16 @@
 [project]
-name = "ai-research-project-template"
+name = "dico-nli-challenge"
 version = "0.1.0"
-description = "A reproducible AI research project template: config-driven MLP training, callbacks, evaluation, and tests"
+description = "SemEval-2027 Task 2 DiCo-NLI: directional-consistent phrase-level NLI with consistency-aware training and decoding"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.26",
+    "protobuf>=4.25",
     "pyyaml>=6.0.3",
-    "scikit-learn>=1.4",
+    "sentencepiece>=0.2",
     "torch>=2.2",
+    "transformers>=5.0",
 ]
 
 [project.optional-dependencies]

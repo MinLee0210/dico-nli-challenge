@@ -50,6 +50,39 @@ def count_parameters(model: torch.nn.Module, verbose: bool = True) -> dict:
     }
 
 
+def save_tiny_backbone(path, words=(), num_labels: int = 4) -> str:
+    """Save a randomly initialised 2-layer BERT + WordPiece tokenizer to `path`.
+
+    Offline stand-in for a real backbone (tests, smoke runs): anything that
+    takes a model id accepts this directory. Returns `str(path)`.
+    """
+    from pathlib import Path
+
+    from transformers import (
+        BertConfig,
+        BertForSequenceClassification,
+        BertTokenizerFast,
+    )
+
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    specials = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
+    vocab = specials + sorted({w.lower() for w in words} - set(specials))
+    (path / "vocab.txt").write_text("\n".join(vocab) + "\n", encoding="utf-8")
+    BertTokenizerFast(vocab_file=str(path / "vocab.txt")).save_pretrained(path)
+    config = BertConfig(
+        vocab_size=len(vocab),
+        hidden_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        intermediate_size=64,
+        max_position_embeddings=128,
+        num_labels=num_labels,
+    )
+    BertForSequenceClassification(config).save_pretrained(path)
+    return str(path)
+
+
 def detect_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")

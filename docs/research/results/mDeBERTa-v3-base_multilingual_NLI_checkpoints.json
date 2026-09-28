@@ -1,0 +1,49 @@
+{
+  "name": "mDeBERTa-v3-base + multilingual NLI checkpoints (MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7, MoritzLaurer/mDeBERTa-v3-base-mnli-xnli)",
+  "category": "model",
+  "links": {
+    "paper": "He, Gao, Chen, 'DeBERTaV3' (arXiv:2111.09543, ICLR 2023; mDeBERTa-v3 introduced there); Laurer et al., 'Less Annotating, More Classifying' (NLI-based zero-shot, 2023) for the checkpoints; Basque NLI context: Heredia et al., 'XNLIeu: a dataset for cross-lingual NLI in Basque' (arXiv:2404.06996, NAACL 2024); 'Lost in Variation? Evaluating NLI Performance in Basque and Spanish Geographical Variants' (arXiv:2506.15239)",
+    "hf_models": [
+      "microsoft/mdeberta-v3-base",
+      "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+      "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+      "HiTZ/xnli-eu (dataset: Basque XNLI for translate-train / intermediate training)"
+    ],
+    "code": [
+      "https://github.com/microsoft/DeBERTa",
+      "https://github.com/hitz-zentroa/xnli-eu",
+      "https://github.com/ilopezgazpio/SemEval-2027-Task-2-DiCo-NLI"
+    ]
+  },
+  "year": "2021 (mDeBERTa-v3-base); NLI checkpoints 2022-2023",
+  "license_access": "Open-weight, MIT (microsoft/mdeberta-v3-base and both MoritzLaurer checkpoints). multilingual-nli-26lang-2mil7 is machine-translated from MNLI/ANLI/FEVER/LingNLI/WANLI and inherits their licenses.",
+  "track_coverage": "T1 (EN), T2 (ES), T3 (EU), T4 (mixed) - a single model for all four tracks. Strongest fit for T2 (Spanish is in both pretraining and NLI fine-tuning); T3 Basque is covered by pretraining only (CC-100) and not by the NLI fine-tuning data of either MoritzLaurer checkpoint.",
+  "basque_quality": "Moderate. Basque is in the CC-100 pretraining corpus, but the 2mil7 NLI data covers 27 languages without Basque and XNLI has no Basque. On XNLIeu (Basque XNLI), 'Lost in Variation' (2025) reports mDeBERTa 78.95% (zero-shot model transfer) / 81.42% (translate-train) vs XLM-RoBERTa-large 80.00% / 83.42%; on the Basque variant set XNLIeu-var mDeBERTa 67.26 / 69.77 vs XLM-R-large 68.24 / 73.21. So mDeBERTa-base is ~1-3.5 points below XLM-R-large on Basque NLI at roughly half the size. Adding HiTZ/xnli-eu (translated XNLI train) as intermediate training is the obvious fix.",
+  "cross_lingual_robustness": "Good for a base-size model: XNLI zero-shot cross-lingual transfer average ~79.8 (vs XLM-R-base 76.2) per the DeBERTaV3 paper [uncertain]; the 2mil7 checkpoint scores EN 0.871 vs ES 0.832 on XNLI (~4 points gap). Mixed-language pairs (EN-EU, ES-EU etc.) were never seen in NLI fine-tuning (premise and hypothesis always share a language in 2mil7), so expect an extra drop on T4 relative to monolingual views, largest for pairs involving Basque; training on all 6 cross-lingual combinations of DiCo T4 and cross-view consistency losses should recover most of it. [uncertain]",
+  "architecture": "Encoder-only DeBERTa-v3 (disentangled attention, ELECTRA-style RTD pretraining with GDES), multilingual: 12 layers, hidden 768, 250k SentencePiece vocabulary shared with XLM-R/mT5-style multilingual coverage, pretrained on CC-100 (2.5 TB, 100 languages). NLI checkpoints add a 3-way entailment/neutral/contradiction head; for DiCo replace with a 4-way head or reuse the NLI head bidirectionally.",
+  "params": "~276-278M total: 86M backbone + ~190M embedding parameters (250k vocab x 768).",
+  "compute": "Light: fine-tunes on a single 16-24 GB GPU in minutes per run with max_len 64 (T4's 18k training rows take roughly 6x a monolingual track). Known issue: mDeBERTa-v3 frequently produces NaN/overflow under fp16 mixed precision; use bf16 or fp32. [uncertain]",
+  "sample_efficiency": "Good relative to XLM-R: DeBERTa-v3 RTD pretraining and the 3.3M-pair NLI intermediate training make fine-tuning on ~1.3k reversible source pairs (x languages/views) comparatively stable. Multilingual training effectively multiplies data (the same source pair appears in EN/ES/EU and 6 mixed combos), which helps, but these are not independent samples, so CV folds must be grouped by pair_id. Seed variance expected lower than XLM-R-large, higher than with English DeBERTa-v3-large on T1. [uncertain]",
+  "reported_results": "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7 (trained on 2,730,000 multilingual-nli-26lang-2mil7 pairs + 2,490 XNLI dev pairs; 3,287,280 pairs total): XNLI accuracy EN 0.871, ES 0.832, DE 0.824, FR 0.823; ~1,697 texts/s (EN) on A100. mDeBERTa-v3-base XNLI zero-shot average ~79.8 (DeBERTaV3 paper) [uncertain]. Basque: XNLIeu mDeBERTa 78.95 (zero-shot transfer) / 81.42 (translate-train); Spanish XNLI 82.02 / 83.27; Basque variants 67.26 / 69.77 ('Lost in Variation', 2025). For comparison, XNLIeu (Heredia et al. 2024): XLM-R-large 81.1 zero-shot / 83.8 translate-train, RoBERTa-euscrawl 83.0 translate-train. No phrase-level (PhrasIS/DiCo) numbers published.",
+  "pilot_dico_results": "Not evaluated in the LREC 2026 pilot (English-only; closest proxy DeBERTa-v3-base: F1 0.75 / unseen SoftCoh 0.84 / unseen HardCoh 0.79 on Positives-A). Organizer smoke tests only used distilbert-base-multilingual-cased, pythia-160m and mt5-small on trial data.",
+  "consistency_guarantee": "none (plain cross-encoder); inference-time consistency via symmetric scoring / joint pair decoding; cross-lingual consistency via pooling over language views sharing a pair_id.",
+  "negative_other_handling": "4th softmax class; no constraint prevents NEG on one direction and FE/EQ on its twin. The NLI head offers a bidirectional-entailment prior (EQ = both entail, FE = phrase1->phrase2 only, BE = reverse only, NEG = neither), usable zero-shot in all three languages. Because NEG in train/dev is singleton-only, the model may learn NEG from surface cues (low overlap) and then misfire on SIMI/REL-like reversible pairs, especially in Basque where overlap statistics differ after translation. [uncertain]",
+  "metric_tradeoff": "On T1 expect a few points lower F1 than English DeBERTa-v3-large. On T2-T4 it is a strong, cheap baseline; its main value for SoftCons/HardCons is that one shared model scores all language views, so view aggregation across a pair_id can raise both F1 and consistency. Symmetric decoding pushes SoftCons toward 1.0; HardCons then tracks accuracy. [uncertain]",
+  "integration": "AutoModelForSequenceClassification.from_pretrained('MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7', num_labels=4, ignore_mismatched_sizes=True) + AutoTokenizer (sentencepiece). One model trained jointly on T1-T4 rows (optionally with a language tag), grouped-CV by pair_id; post-process with REVERSE_PERM symmetric scoring and cross-view log-prob pooling. Optional intermediate step: continue NLI training on HiTZ/xnli-eu before DiCo fine-tuning.",
+  "ensemble_compatibility": "Yes: softmax class probabilities; temperature-scale per track on grouped dev.",
+  "inference_cost": "Negligible: seconds for a monolingual test set (~4k rows x 2 directions); T4 (~6x rows) about a minute on one GPU.",
+  "rules_disclosure": "Disclose: open-weight; encoder-only (mDeBERTa-v3); fine-tuned; external training data embedded in the checkpoint (multilingual-nli-26lang-2mil7 = machine-translated MNLI/ANLI/FEVER/LingNLI/WANLI, plus XNLI dev); XNLIeu if used for intermediate training; any MT used for augmentation.",
+  "contamination": "Low. CC-100 web text may contain source headlines/captions but not phrase labels. NLI training sets do not include PhrasIS/iSTS. The DiCo ES/EU data were produced with NMT + LLM translation and human validation; if participants translate with similar MT systems, translation style overlap is possible but not label leakage. Pending PhrasIS policy applies to any direct use of public PhrasIS labels (DiCo test pairs derive from PhrasIS).",
+  "structural_cue_dependence": "None intrinsically; uses only phrase texts. Cross-view pooling relies on shared pair_id across tracks - verify test metadata keeps this before depending on it.",
+  "priority": "P1",
+  "expected_gain": "Best cost/benefit multilingual baseline and ensemble member for T2-T4: one ~278M model covers all tracks, starts from 3.3M-pair NLI training (incl. Spanish), and fine-tunes stably on small data. Expected to be competitive with XLM-R-large on ES and T4, 1-3 points behind it on Basque (per XNLIeu evidence), and a few points behind English DeBERTa-v3-large on T1. Recommended as the fast multilingual default and as a diversity member next to XLM-R-large rather than the sole T3 model. [uncertain]",
+  "uncertain": [
+    "cross_lingual_robustness",
+    "compute",
+    "sample_efficiency",
+    "reported_results",
+    "negative_other_handling",
+    "metric_tradeoff",
+    "expected_gain"
+  ]
+}

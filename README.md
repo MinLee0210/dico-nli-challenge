@@ -1,157 +1,220 @@
-# AI Research Project Template
+# DiCo-NLI Challenge
 
-A small, opinionated scaffold for ML research code. It pairs a **config-driven
-training loop** with reusable **callbacks**, a standalone **evaluation** path,
-and a **test suite** — so an experiment is reproducible from a YAML file plus a
-checkpoint.
+Our system for [SemEval-2027 Task 2: Directional-Consistent Fine-Grained NLI
+(DiCo-NLI)](https://github.com/ilopezgazpio/SemEval-2027-Task-2-DiCo-NLI)
+([CodaBench](https://www.codabench.org/competitions/18038/)).
 
-The reference model is deliberately trivial: a multilayer perceptron (MLP) with
-a linear classification head over fixed-size feature vectors. Swap the model,
-dataset, and metrics for your own task; the surrounding structure (config
-splits, pipelines, callbacks, scripts, tests) is what the template provides.
+Given an ordered phrase pair `(text1, text2)`, predict `EQUIVALENCE`,
+`FORWARD_ENTAILMENT`, `BACKWARD_ENTAILMENT`, or `NEGATIVE_OTHER`. Every
+reversible pair also appears reversed, and systems are scored on
+**Weighted F1**, **SoftCons** (the two directions agree under
+`Rev: FE↔BE, EQ↔EQ`), and **HardCons** (both directions correct). Four tracks:
+English, Spanish, Basque, and mixed-language.
+
+The repo is a config-driven fine-tuning pipeline for Hugging Face
+cross-encoders, with **consistency-aware training** (twin-aware batches plus a
+reversal-KL loss) and **consistency-aware decoding** (pooling the log-probs of
+twins, or of every language view of a source pair). Research notes are in
+[`docs/RESEARCH.md`](docs/RESEARCH.md), and next steps are in
+[`docs/TODO.md`](docs/TODO.md).
 
 ## Contents
 
 - [Quickstart](#quickstart)
-- [Data format](#data-format)
+- [Data](#data)
 - [Training](#training)
-- [Evaluation and inference](#evaluation-and-inference)
+- [Decoding modes](#decoding-modes)
+- [Evaluation, prediction, submission](#evaluation-prediction-submission)
 - [Repository layout](#repository-layout)
 - [Configuration](#configuration)
-- [Extending the template](#extending-the-template)
 - [License](#license)
 
 ## Quickstart
 
-Requires Python ≥ 3.12 and [`uv`](https://docs.astral.sh/uv/).
+Requires Python ≥ 3.12 and [`uv`](https://docs.astral.sh/uv/). Fine-tuning is
+meant for a GPU training machine. Tests and the smoke run are CPU-only and
+work offline.
 
 ```bash
-git clone <your-repo-url> ai-research-project-template
-cd ai-research-project-template
-
-uv sync                # core: torch, numpy, scikit-learn
-uv sync --extra rich   # optional: pretty training summary (panels / tables)
+uv sync                # core: torch, transformers>=5, sentencepiece
+uv sync --extra rich   # optional: pretty training summary
 uv sync --extra wandb  # optional: Weights & Biases logging
-uv run pytest          # test suite
+uv run pytest          # test suite (tiny random BERT, no downloads)
 
-# end-to-end on synthetic features, no dataset required
+# end-to-end on synthetic data with a tiny offline backbone
 uv run python scripts/training/smoke_test.py
+
+# fetch the official data + scorer into data/raw/dico (gitignored)
+uv run python scripts/data/fetch_data.py
 ```
 
 Platform-aware torch builds resolve from `pyproject.toml`: Linux + NVIDIA uses
-the CUDA wheels, macOS resolves CPU/MPS wheels.
+the CUDA wheels, and macOS resolves CPU/MPS wheels.
 
-## Data format
+## Data
 
-The template trains on fixed-size feature matrices stored as `.npz` files with
-two arrays:
-
-| Array | Shape | Dtype | Meaning |
-|---|---|---|---|
-| `X` | `(N, input_dim)` | `float32` | one feature vector per example |
-| `y` | `(N,)` | `int64` | class label in `[0, num_classes)` |
-
-Expected layout:
+`scripts/data/fetch_data.py` clones the task repo into `data/raw/dico`. The
+official CSVs are used as-is:
 
 ```
-data/
-└── raw/
-    ├── train.npz    # required
-    ├── val.npz      # optional (held-out split for val_loss / early stopping)
-    └── test.npz     # optional (reported metrics)
+data/raw/dico/final_data/{train,dev}/
+    dico_nli_<split>_track<N>_participant_labeled.csv   # instance_id,pair_id,text1_lang,text2_lang,text1,text2,label
+    dico_nli_<split>_track<N>_submission_template.csv   # instance_id,label
+    dico_nli_<split>_track<N>_reference.csv             # + reverse_pair_id (official scorer)
 ```
 
-Generate a synthetic dataset to try the pipeline:
+| Split | Track 1 EN | Track 2 ES | Track 3 EU | Track 4 mixed |
+|---|--:|--:|--:|--:|
+| Train | 3042 | 3042 | 3042 | 18252 |
+| Dev | 660 | 660 | 660 | 3960 |
 
-```bash
-uv run python scripts/data/make_synthetic.py \
-    --out data/raw --n_samples 4000 --n_features 32 --n_classes 5
-```
+Structural facts the code relies on. You can check them with
+`scripts/data/inspect_data.py`:
+
+- An instance id is `<pair_id>__<l1>-<l2>__<original|flipped>`. The reversed
+  twin swaps the languages and the direction tag. This matches
+  `reverse_pair_id` on every train/dev reference file.
+- Every reversible item has its twin in the same file. `NEGATIVE_OTHER` items
+  are singletons, with no twin.
+- A `pair_id` spans all tracks. It has 2 rows in each monolingual track and 12
+  in Track 4 (6 language combinations × 2 directions), all in one canonical
+  orientation.
 
 ## Training
 
 ```bash
+# Track 1 baseline (DeBERTa-v3-base)
 uv run python scripts/training/train.py --config configs/train.yaml
 
-# individual overrides win over the YAML
-uv run python scripts/training/train.py \
-    --config configs/train.yaml --epochs 50 --lr 5e-4 --batch_size 64
+# one multilingual model for all tracks (source-pair decoding)
+uv run python scripts/training/train.py --config configs/multilingual_mmbert.yaml
+
+# overrides win over the YAML
+uv run python scripts/training/train.py --config configs/train.yaml \
+    --consistency_weight 1.0 --lr 3e-5 --decoding source
 ```
 
-The run writes `checkpoints/<run_name>/best.pt`, periodic `epoch_*.pt`, and a
-`train_log.json`. Checkpoints carry the model config and label mapping so the
-evaluator can rebuild the model without the original YAML.
+| Config | Backbone | Tracks |
+|---|---|---|
+| `train.yaml` | DeBERTa-v3-base (pilot reference) | T1 |
+| `track1_deberta_v3_large_nli.yaml` | DeBERTa-v3-large, MNLI/FEVER/ANLI/Ling/WANLI | T1 |
+| `xlmr_large_xnli_multilingual.yaml` | XLM-R-large XNLI | all |
+| `multilingual_mmbert.yaml` | mmBERT-base (2025, 1,833 langs) | all |
+| `multilingual_mrbert.yaml` | MrBERT (BSC, Dec 2025) | all |
+| `multilingual_mdeberta.yaml` | mDeBERTa-v3-base multilingual NLI | all |
+| `track3_jaunbert.yaml` | JaunBERT (HiTZ, Jul 2026, Basque) | T3 |
 
-## Evaluation and inference
+**Data augmentation** (train only; `augment:` in the YAML or `--augment`):
+`reverse_negatives` adds the reversed copy of every NEG pair, and `transitive`
+adds entailments implied by chaining gold labels over shared phrases
+(a ⊨ b, b ⊨ c ⇒ a ⊨ c). On Track 1 this grows train from 3,042 to 4,198 rows.
+Training on all tracks is itself a 9-view augmentation of every source pair.
+See `docs/RESEARCH.md` §3b for the wider plan.
+
+A run writes `checkpoints/<run_name>/best.pt` (selected on `dico_mean`, the
+mean of the three official scores) and a `train_log.json`. Checkpoints store
+the `ModelConfig` (backbone id, max length), so the model can be rebuilt
+without the YAML. Loading one re-downloads, or reads from the HF cache, the
+backbone named there.
+
+## Decoding modes
+
+`src/decoding.py` maps each instance into its source pair's canonical frame
+(`original`; `flipped` rows get Rev applied), averages log-probs within a
+group, picks one label, and maps it back:
+
+| `decoding` | group | effect |
+|---|---|---|
+| `independent` | each instance | plain argmax (baseline) |
+| `twin` | instance + reversed twin | SoftCons = 1 on every pair not decoded as NEG |
+| `source` | all rows sharing `pair_id` in the given files | also pools language views (Track 4, or Tracks 1–4 together) |
+
+`neg_bias` shifts the `NEGATIVE_OTHER` decision and should be tuned on dev.
+`structural_prior` decodes rows that have twins among the reversible labels
+and singletons as NEG. It is exact on train/dev, but it exploits dataset
+construction. Read the risk notes in `docs/RESEARCH.md` before enabling it
+for a submission.
+
+## Evaluation, prediction, submission
 
 ```bash
-# evaluate a checkpoint on a split
-uv run python scripts/training/evaluate.py \
-    --ckpt checkpoints/<run>/best.pt --data data/raw/test.npz
+# metrics under all decoding modes
+uv run python scripts/training/evaluate.py --ckpt checkpoints/<run>/best.pt \
+    --data data/raw/dico/final_data/dev/dico_nli_dev_track1_participant_labeled.csv
 
-# score a single feature file
-uv run python -m src.pipelines.infer \
-    --ckpt checkpoints/<run>/best.pt --features data/raw/test.npz --index 0
+# predictions (ensemble: pass several --ckpt; reuse saved --logprobs *.npz)
+uv run python -m src.pipelines.predict --ckpt checkpoints/<run>/best.pt \
+    --inputs data/raw/dico/final_data/dev/dico_nli_dev_track{1,2,3,4}_participant_labeled.csv \
+    --out_dir results/predictions/dev --decoding source
+
+# confirm with the organizers' scorer
+uv run python scripts/submission/official_score.py \
+    --gold data/raw/dico/final_data/dev/dico_nli_dev_track1_reference.csv \
+    --predictions results/predictions/dev/track1_predictions.csv \
+    --output_dir results/predictions/dev/track1_official
+
+# validate against templates and zip for CodaBench (files at ZIP root)
+uv run python scripts/submission/make_submission.py --pred_dir results/predictions/dev \
+    --templates data/raw/dico/final_data/dev/dico_nli_dev_track{1,2,3,4}_submission_template.csv \
+    --out results/submissions/dev_submission.zip
 ```
+
+`src.pipelines.eval.dico_metrics` re-implements the official metrics. It
+matches the official scorer exactly on all dev tracks and decoding modes.
 
 ## Repository layout
 
 ```
 src/
-├── config.py            # MLPConfig — model architecture only
-├── data.py              # FeatureDataset, npz loading, synthetic generator
+├── labels.py            # label set, Rev permutation, instance-id / twin rules
+├── config.py            # ModelConfig — backbone, max_length, head dropout
+├── data.py              # CSV I/O, DicoDataset, PairCollator, TwinBatchSampler, synthetic data
+├── decoding.py          # independent / twin / source consistency decoding
+├── augment.py           # train-only augmentation: reverse_negatives, transitive
 ├── modules/
-│   ├── model.py         # MLPBackbone + MLPClassifier (logits, feature)
-│   └── loss.py          # ClassificationLoss + probability/label helpers
+│   ├── model.py         # PairClassifier (HF cross-encoder -> logits, feature)
+│   └── loss.py          # DicoLoss = CE + reversal-consistency KL
 ├── pipelines/
-│   ├── config.py        # TrainingConfig — training-loop hyperparameters
+│   ├── config.py        # TrainingConfig — loop, loss, decoding, callbacks
 │   ├── train.py         # training loop + callback wiring
-│   ├── eval.py          # accuracy / macro-F1 / per-class report
-│   └── infer.py         # single-checkpoint inference
+│   ├── eval.py          # Weighted F1 / SoftCons / HardCons + diagnostics
+│   └── predict.py       # checkpoints / log-probs -> track<N>_predictions.csv
 ├── callbacks/           # checkpoint, early_stopping, lr_scheduler, wandb
-└── utils/               # io, model, device helpers
+└── utils/               # io, model (incl. tiny offline backbone), device helpers
 configs/                 # training YAML configs
 scripts/
-├── data/                # synthetic dataset generator
-└── training/            # train, evaluate, smoke_test
-tests/                   # pytest suite
-docs/                    # research notes, experiment log
+├── data/                # fetch_data, inspect_data
+├── training/            # train, evaluate, smoke_test
+└── submission/          # official_score, make_submission
+tests/                   # pytest suite (offline)
+docs/                    # RESEARCH, TODO, NOTES, EXPERIMENTS, research/ survey
 notebooks/               # exploratory notebooks
 ```
 
 ## Configuration
 
-Configuration is split in two, mirroring the reference project:
+Configuration is split in two:
 
-- **`src/config.py` → `MLPConfig`** holds the *architecture* (input/output
-  dims, hidden layers, dropout, ...). It is saved into every checkpoint.
-- **`src/pipelines/config.py` → `TrainingConfig`** holds the *training loop*
-  (data paths, optimizer, callbacks). It is loaded from `configs/train.yaml`
-  and overridable from the CLI.
-
-Callbacks are wired from the same YAML:
+- **`src/config.py` → `ModelConfig`** holds the *architecture*: backbone id,
+  tokenizer, max length, head dropout, and `fix_pair_template`. It is saved into every checkpoint.
+- **`src/pipelines/config.py` → `TrainingConfig`** holds the *training loop*:
+  data files, optimizer, loss weights, decoding, and callbacks. It is loaded
+  from `configs/*.yaml`, overridable from the CLI, and applies ModelConfig
+  overrides from its `arch:` block.
 
 ```yaml
-lr_scheduler: {type: cosine, t_max: 100, eta_min: 1.0e-5}
-early_stopping: {enabled: true, monitor: accuracy, mode: max, patience: 10}
-save_best: true
-best_metric: accuracy
-best_mode: max
-wandb: {enabled: false, project: ai-research-template}
+consistency_weight: 0.5          # symmetric KL between p(x) and Rev p(x_rev)
+decoding: twin                   # independent | twin | source
+lr_scheduler: {type: warmup_linear, t_max: auto, warmup_ratio: 0.1}
+early_stopping: {enabled: true, monitor: dico_mean, mode: max, patience: 3}
+best_metric: dico_mean           # or weighted_f1 / soft_cons / hard_cons / val_loss
+augment: [reverse_negatives]     # train-only augmentation (src/augment.py)
+arch: {backbone: microsoft/deberta-v3-base, max_length: 128}
+# arch: {backbone: HiTZ/JaunBERT, fix_pair_template: true}  # repair a broken pair template
 ```
-
-## Extending the template
-
-1. Replace `MLPClassifier` in `src/modules/model.py` (keep the
-   `forward(x) -> (logits, feature)` contract).
-2. Replace `FeatureDataset` in `src/data.py` for your input format.
-3. Replace the metrics in `src/pipelines/eval.py`.
-4. Wire any new callback into `src/callbacks/` and register it in
-   `build_callbacks` (`src/pipelines/train.py`).
-
-Everything else — checkpoint schema, CLI, W&B/early-stopping/best-checkpoint
-callbacks, tests — keeps working.
 
 ## License
 
-Released under the repository [LICENSE](LICENSE).
+This repository is released under the [LICENSE](LICENSE) (MIT). The task data,
+scorer, and starter kit belong to the organizers (GPL-3.0). They are fetched
+at runtime into `data/raw/dico` and not redistributed here.
