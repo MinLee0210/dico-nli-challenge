@@ -1,0 +1,65 @@
+# One multilingual model for all four tracks: mDeBERTa-v3-base (NLI-pretrained
+# 2mil7 checkpoint; its 3-way NLI head is re-initialised to 4 labels) trained on the
+# union of Tracks 1-4 (EN, ES, EU, mixed). Validation decodes with
+# `decoding: source`, pooling every language view of a source pair in the dev
+# files — the same pooling used at submission time.
+
+data_root: data/raw/dico/final_data
+train_files:
+  - train/dico_nli_train_track1_participant_labeled.csv
+  - train/dico_nli_train_track2_participant_labeled.csv
+  - train/dico_nli_train_track3_participant_labeled.csv
+  - train/dico_nli_train_track4_participant_labeled.csv
+val_files:
+  - dev/dico_nli_dev_track1_participant_labeled.csv
+  - dev/dico_nli_dev_track2_participant_labeled.csv
+  - dev/dico_nli_dev_track3_participant_labeled.csv
+  - dev/dico_nli_dev_track4_participant_labeled.csv
+test_files: []
+# Label-safe train-only augmentation (src/augment.py): reverse_negatives, transitive
+augment: []
+seed: 42
+
+ckpt_dir: checkpoints
+result_dir: results
+run_name: e15_mdeberta_sym_prior
+
+epochs: 20
+batch_size: 32
+pin_memory: true
+amp: true
+lr: 1.5e-5
+weight_decay: 0.01
+log_every: 100
+eval_every: 1
+ckpt_every: 0
+
+consistency_weight: 0.0
+
+decoding: source
+neg_bias: 0.0
+structural_prior: true
+
+arch:
+  backbone: MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7
+  max_length: 64
+  symmetric: true
+
+lr_scheduler:
+  type: warmup_linear
+  t_max: auto
+  warmup_ratio: 0.1
+early_stopping:
+  enabled: true
+  monitor: dico_mean
+  mode: max
+  patience: 5
+save_best: true
+best_metric: dico_mean
+best_mode: max
+
+wandb:
+  enabled: true
+  project: dico-nli
+epoch_fraction: 0.15
+drop_negatives: true

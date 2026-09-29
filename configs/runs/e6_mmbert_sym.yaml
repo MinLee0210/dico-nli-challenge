@@ -1,0 +1,63 @@
+# mmBERT-base (JHU, Sep 2025 / ICML 2026): ModernBERT-architecture encoder
+# pretrained on 3T tokens in 1,833 languages incl. Basque (added in the
+# annealing phase). Newest massively multilingual encoder; 8k context, fast
+# (unpadded attention), XNLI avg 77.7 for base. No NLI checkpoint exists, so
+# it starts from the MLM weights; ModernBERT-style models prefer a higher lr
+# than DeBERTa/XLM-R. Trained on all four tracks, `source` decoding.
+data_root: data/raw/dico/final_data
+train_files:
+  - train/dico_nli_train_track1_participant_labeled.csv
+  - train/dico_nli_train_track2_participant_labeled.csv
+  - train/dico_nli_train_track3_participant_labeled.csv
+  - train/dico_nli_train_track4_participant_labeled.csv
+val_files:
+  - dev/dico_nli_dev_track1_participant_labeled.csv
+  - dev/dico_nli_dev_track2_participant_labeled.csv
+  - dev/dico_nli_dev_track3_participant_labeled.csv
+  - dev/dico_nli_dev_track4_participant_labeled.csv
+test_files: []
+# Label-safe train-only augmentation (src/augment.py): reverse_negatives, transitive
+augment: []
+seed: 42
+
+ckpt_dir: checkpoints
+result_dir: results
+run_name: e6_mmbert_sym
+
+epochs: 8
+batch_size: 32
+pin_memory: true
+amp: true
+lr: 5.0e-5
+weight_decay: 0.01
+log_every: 100
+eval_every: 1
+ckpt_every: 0
+
+consistency_weight: 0.0
+
+decoding: source
+neg_bias: 0.0
+structural_prior: false
+
+arch:
+  backbone: jhu-clsp/mmBERT-base
+  max_length: 64
+  symmetric: true
+
+lr_scheduler:
+  type: warmup_linear
+  t_max: auto
+  warmup_ratio: 0.1
+early_stopping:
+  enabled: true
+  monitor: dico_mean
+  mode: max
+  patience: 2
+save_best: true
+best_metric: dico_mean
+best_mode: max
+
+wandb:
+  enabled: true
+  project: dico-nli

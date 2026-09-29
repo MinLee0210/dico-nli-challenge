@@ -1,0 +1,58 @@
+# Track 3 (Basque): JaunBERT (HiTZ, Jul 2026), the newest Basque encoder —
+# ModernBERT-style, continued from BSC-LT/MrBERT on latxa-corpus-v2. Its
+# tokenizer encodes pairs as `<unk> A<s><unk> B<s>` upstream, so
+# `fix_pair_template` rebuilds `<s> A </s> B </s>` from the model config.
+# Revisions (branches) main / periodistikoa (news) / zientifikoa / legala;
+# main is the general model.
+
+data_root: data/raw/dico/final_data
+train_files:
+  - train/dico_nli_train_track3_participant_labeled.csv
+val_files:
+  - dev/dico_nli_dev_track3_participant_labeled.csv
+test_files: []
+# Label-safe train-only augmentation (src/augment.py): reverse_negatives, transitive
+augment: []
+seed: 42
+
+ckpt_dir: checkpoints
+result_dir: results
+run_name: e10_jaunbert_t3
+
+epochs: 10
+batch_size: 16
+pin_memory: true
+amp: true
+lr: 5.0e-5
+weight_decay: 0.01
+log_every: 100
+eval_every: 1
+ckpt_every: 0
+
+consistency_weight: 0.5
+
+decoding: twin
+neg_bias: 0.0
+structural_prior: false
+
+arch:
+  backbone: HiTZ/JaunBERT
+  max_length: 128
+  fix_pair_template: true
+
+lr_scheduler:
+  type: warmup_linear
+  t_max: auto
+  warmup_ratio: 0.1
+early_stopping:
+  enabled: true
+  monitor: dico_mean
+  mode: max
+  patience: 2
+save_best: true
+best_metric: dico_mean
+best_mode: max
+
+wandb:
+  enabled: true
+  project: dico-nli

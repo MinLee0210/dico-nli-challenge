@@ -1,0 +1,70 @@
+# Track 1 (English) baseline — DeBERTa-v3-base, the pilot's best family
+# (LREC 2026 pilot, PhrasIS 6-label setup: WF1 0.75 / SoftCoh 0.84 / HardCoh 0.79, no
+# consistency-aware decoding). Training-loop hyperparameters only; model
+# architecture lives in src/config.py's ModelConfig, overridden by `arch`.
+
+# --- data --- (paths relative to data_root; fetch with scripts/data/fetch_data.py)
+data_root: data/raw/dico/final_data
+train_files:
+  - train/dico_nli_train_track1_participant_labeled.csv
+val_files:
+  - dev/dico_nli_dev_track1_participant_labeled.csv
+test_files: []
+# Label-safe train-only augmentation (src/augment.py): reverse_negatives, transitive
+augment: []
+seed: 42
+
+# --- output ---
+ckpt_dir: checkpoints
+result_dir: results
+run_name: e1_deberta_base_t1
+
+# --- optimization ---
+epochs: 10
+batch_size: 16
+accum_steps: 1
+num_workers: 0
+pin_memory: true
+amp: true
+lr: 2.0e-5
+weight_decay: 0.01
+max_grad_norm: 1.0
+log_every: 50
+eval_every: 1
+ckpt_every: 0
+
+# --- loss ---
+label_smoothing: 0.0
+consistency_weight: 0.0   # try 0.5-1.0 (symmetric KL to the reversed twin)
+
+# --- decoding --- (src/decoding.py)
+decoding: twin            # independent | twin | source
+neg_bias: 0.0
+structural_prior: false   # see docs/RESEARCH.md before enabling
+
+arch:
+  backbone: microsoft/deberta-v3-base
+  max_length: 128
+
+# --- callbacks ---
+lr_scheduler:
+  type: warmup_linear
+  t_max: auto
+  warmup_ratio: 0.1
+early_stopping:
+  enabled: true
+  monitor: dico_mean
+  mode: max
+  patience: 3
+save_best: true
+best_metric: dico_mean
+best_mode: max
+
+wandb:
+  enabled: true
+  project: dico-nli
+  entity: null
+  group: null
+  monitor: dico_mean
+  mode: max
+  log_artifacts: false

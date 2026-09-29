@@ -222,10 +222,18 @@ class PairCollator:
     row i's reversed twin, or -1.
     """
 
-    def __init__(self, dataset: DicoDataset, tokenizer, max_length: int = 128):
+    def __init__(
+        self,
+        dataset: DicoDataset,
+        tokenizer,
+        max_length: int = 128,
+        with_swap: bool = False,
+    ):
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.max_length = max_length
+        # Also emit the (text2, text1) encoding as `sw_*` keys.
+        self.with_swap = with_swap
 
     def __call__(self, indices: List[int]) -> Dict[str, torch.Tensor]:
         examples = [self.dataset.examples[i] for i in indices]
@@ -238,6 +246,16 @@ class PairCollator:
             return_tensors="pt",
         )
         batch = dict(enc)
+        if self.with_swap:
+            sw = self.tokenizer(
+                [ex.text2 for ex in examples],
+                [ex.text1 for ex in examples],
+                padding=True,
+                truncation=True,
+                max_length=self.max_length,
+                return_tensors="pt",
+            )
+            batch.update({f"sw_{k}": v for k, v in sw.items()})
         position = {idx: pos for pos, idx in enumerate(indices)}
         batch["index"] = torch.tensor(indices, dtype=torch.long)
         batch["twin"] = torch.tensor(
@@ -269,12 +287,18 @@ class TwinBatchSampler(Sampler[List[int]]):
         batch_size: int,
         shuffle: bool = True,
         seed: int = 0,
+        fraction: float = 1.0,
     ):
+        if not 0.0 < fraction <= 1.0:
+            raise ValueError(f"fraction must be in (0, 1], got {fraction}")
         if batch_size < 2:
             raise ValueError("batch_size must be >= 2 to keep twins together")
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.seed = seed
+        # Each epoch visits a random `fraction` of the units (finer-grained
+        # validation when many near-duplicate views make one epoch too long).
+        self.fraction = fraction
         self.epoch = 0
         seen, units = set(), []
         for i, j in enumerate(dataset.twins):
@@ -292,6 +316,7 @@ class TwinBatchSampler(Sampler[List[int]]):
         units = list(self.units)
         if self.shuffle:
             random.Random(self.seed + self.epoch).shuffle(units)
+        units = units[: max(1, round(len(units) * self.fraction))]
         batches, current = [], []
         for unit in units:
             if current and len(current) + len(unit) > self.batch_size:

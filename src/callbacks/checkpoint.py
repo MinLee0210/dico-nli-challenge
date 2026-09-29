@@ -33,7 +33,7 @@ class BestCheckpoint(Callback):
         path = ctx.ckpt_dir / "best.pt"
         save_checkpoint(
             ctx.model,
-            ctx.optimizer,
+            None,
             state.step,
             path,
             extra={

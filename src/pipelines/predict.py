@@ -107,7 +107,7 @@ def predict(
                 dataset,
                 batch_size=batch_size,
                 shuffle=False,
-                collate_fn=PairCollator(dataset, tokenizer, cfg.max_length),
+                collate_fn=PairCollator(dataset, tokenizer, cfg.max_length, cfg.symmetric),
             )
             log_probs, _ = predict_log_probs(model, loader, device)
             logprob_dir = out_dir / "logprobs"

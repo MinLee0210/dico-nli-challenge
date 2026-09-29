@@ -47,12 +47,21 @@ class TrainingConfig:
     max_grad_norm: float = 1.0
     log_every: int = 50
     eval_every: int = 1
+    # Fraction of twin units visited per epoch (<1 = validate more often).
+    epoch_fraction: float = 1.0
+    # Train on the reversible labels only (for use with `structural_prior`,
+    # which decides NEGATIVE_OTHER from the file layout instead of the model).
+    drop_negatives: bool = False
     ckpt_every: int = 0  # 0 = only best.pt (HF backbones make epoch_*.pt large)
 
     # --- loss ---
     label_smoothing: float = 0.0
     # Weight of the symmetric KL between p(x) and Rev(p(x_rev)); 0 disables.
     consistency_weight: float = 0.0
+    # Per-label CE weights in LABELS order (EQ, FE, BE, NEG); None = unweighted.
+    class_weights: Optional[list] = None
+    # Focal-loss gamma; 0 = plain cross-entropy.
+    focal_gamma: float = 0.0
 
     # --- decoding (see src/decoding.py) ---
     decoding: str = "twin"  # independent | twin | source
