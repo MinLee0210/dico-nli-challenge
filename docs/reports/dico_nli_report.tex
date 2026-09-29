@@ -170,8 +170,8 @@ training rows (1{,}282 reversible pairs and 478 \NEG) and 660 development rows
 Interpretable STS~\cite{lopezgazpio2017ists,semeval2016ists} introduced the
 chunk-level relation types from which PhrasIS and DiCo-NLI are derived.
 Consistency of neural models under logical transformations has been studied
-for NLI~\cite{minervini2018adversarially,li2019logic} and for question
-answering~\cite{ribeiro2019red}, usually through extra loss terms. For
+for NLI~\cite{minervini2018adversarially,li2019logic}, usually through extra
+loss terms. For
 symmetric pair tasks, Xu et al.~\cite{xu2019symmetric} and Kumar and
 Joshi~\cite{kumar2022striking} penalise disagreement between the two input
 orders; we use the same idea for an antisymmetric label set, where the two
@@ -180,9 +180,7 @@ showing that NLI models lean on lexical overlap~\cite{hans2019} and fail on
 simple lexical inferences~\cite{glockner2018breaking}, and on focal
 loss~\cite{lin2017focal} and intermediate-task transfer~\cite{pruksachatkun2020intermediate}
 as remedies. For Basque we rely on multilingual encoders; XLM-R-large was the
-strongest of the multilingual encoders evaluated on XNLIeu~\cite{xnlieu2024};
-Basque-specific language models such as Latxa~\cite{latxa2024} are larger
-decoders that we did not try.
+strongest of the multilingual encoders evaluated on XNLIeu~\cite{xnlieu2024}.
 
 \section{System}
 
@@ -192,7 +190,7 @@ and a linear head maps the first-token state to four
 logits~\cite{bert2019,wolf2020transformers}. We use
 DeBERTa-v3~\cite{deberta2021,debertav3} for English only, and three
 multilingual backbones: mmBERT-base~\cite{mmbert2025}, an mDeBERTa-v3-base
-checkpoint fine-tuned on multilingual NLI data~\cite{laurer2023universal,laurer2024less},
+checkpoint fine-tuned on multilingual NLI data~\cite{laurer2023universal},
 and XLM-R-large~\cite{xlmr2020} fine-tuned on XNLI~\cite{xnli2018,multinli2018}.
 Multilingual models are trained on all four tracks at once (27{,}378 rows),
 so each source pair is seen in nine language combinations.
@@ -231,7 +229,7 @@ $10^{-5}$.
 
 
 \subsection{Training objectives}
-The loss is cross-entropy, optionally with label smoothing~\cite{szegedy2016rethinking},
+The loss is cross-entropy, optionally with label smoothing,
 plus a reversal-consistency term between each row and its twin, which a
 twin-aware batch sampler keeps in the same batch:
 \begin{equation}
@@ -290,7 +288,7 @@ every 15\% of an epoch and stop after five checks without improvement.
 The early-stopping monitor is the mean of the three official scores with the
 four development files decoded together. It is only used to stop training and
 to compare runs quickly; every table decodes each track separately. Ensembles
-average log-probabilities before decoding~\cite{lakshminarayanan2017deep}.
+average log-probabilities before decoding.
 Our metric code agrees with the official scorer to machine precision on all
 tracks and decoding modes, and the headline results were re-scored with the
 official scorer.
