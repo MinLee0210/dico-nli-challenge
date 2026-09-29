@@ -55,13 +55,44 @@ def fmt(row) -> str:
     return " & ".join(f"{100 * v:.1f}" for v in row)
 
 
+def bold_best(lines: list) -> list:
+    """Bold the highest value in each numeric column of `name & v & ... \\\\`
+    rows (ties all bold). Columns where every row is equal stay plain."""
+    cells = [line.rstrip(" \\").split(" & ") for line in lines]
+    for col in range(1, len(cells[0])):
+        vals = [float(c[col]) for c in cells]
+        best = max(vals)
+        if min(vals) == best:
+            continue
+        for c, v in zip(cells, vals):
+            if v == best:
+                c[col] = rf"\textbf{{{c[col]}}}"
+    return [" & ".join(c) + r" \\" for c in cells]
+
+
+def bold_file(path: Path) -> None:
+    lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
+    path.write_text("\n".join(bold_best(lines)) + "\n")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--logprob_dir", type=Path, required=True)
+    ap.add_argument("--logprob_dir", type=Path)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument(
+        "--bold_only", action="store_true",
+        help="only bold the best values in existing tables under --out",
+    )
     ap.add_argument("--data_root", type=Path, default=Path("data/raw/dico/final_data"))
     ap.add_argument("--extra", nargs="*", default=[], help="name=run1,run2 systems")
     args = ap.parse_args()
+    if args.bold_only:
+        for path in sorted(args.out.glob("dev_*.tex")):
+            bold_file(path)
+            print(f"bolded {path}")
+        return
+    if args.logprob_dir is None:
+        ap.error("--logprob_dir is required unless --bold_only")
 
     systems = dict(SYSTEMS)
     for spec in args.extra:
@@ -82,7 +113,7 @@ def main() -> None:
             s = score_tracks(examples, ids, np.mean(per_run, axis=0), prior)
             lines.append(f"{name} & " + " & ".join(fmt(r) for r in s) + r" \\")
         path = args.out / f"dev_{'prior' if prior else 'clean'}.tex"
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(bold_best(lines)) + "\n")
         print(f"wrote {path}")
 
 

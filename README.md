@@ -217,9 +217,9 @@ arch: {backbone: microsoft/deberta-v3-base, max_length: 128}
 
 ## Results, report, model card
 
-- Technical report: [`docs/report/dico_nli_report.pdf`](docs/report/dico_nli_report.pdf)
+- Technical report: [`docs/reports/dico_nli_report.pdf`](docs/reports/dico_nli_report.pdf)
   (source `.tex` alongside; tables from `scripts/training/report_tables.py`).
-- Model card: [`docs/report/MODEL_CARD.md`](docs/report/MODEL_CARD.md). Checkpoints
+- Model card: [`docs/reports/MODEL_CARD.md`](docs/reports/MODEL_CARD.md). Checkpoints
   are in the private Hugging Face repo `LakoreAI/dico-nli-checkpoints`.
 - Run log: [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md).
 
