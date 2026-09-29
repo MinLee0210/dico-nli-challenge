@@ -7,6 +7,7 @@
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{url}
+\usepackage{afterpage}
 \usepackage{xcolor}
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,fit,calc,backgrounds}
@@ -92,6 +93,50 @@ result: none of the five \NEG-focused methods we tried improved on a plain
 ensemble. Code, configurations and run logs are
 public.\footnote{\url{https://github.com/MinLee0210/dico-nli-challenge}}
 
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[node distance=5mm and 6mm]
+  % inputs
+  \node[box, fill=io, text width=22mm] (x1) {$x=(a,b)$\\\texttt{original}};
+  \node[box, fill=io, text width=22mm, below=6mm of x1] (x2) {$x'=(b,a)$\\\texttt{flipped}};
+  \node[box, fill=io, text width=22mm, below=6mm of x2, dashed] (x3) {other language\\views (T4)};
+  % encoder
+  \node[box, fill=enc, text width=24mm, right=of x1] (e1) {cross-encoder\\$\ell(x)$};
+  \node[box, fill=enc, text width=24mm, right=of x2] (e2) {cross-encoder\\$\ell(x')$};
+  \node[box, fill=enc, text width=24mm, right=of x3, dashed] (e3) {cross-encoder\\$\ell(\cdot)$};
+  \draw[dashed, gray] (e1) -- node[right, font=\scriptsize, text=black] {shared weights} (e2);
+  % canonical frame
+  \node[box, fill=dec, text width=17mm, right=9mm of e1] (c1) {$\ell(x)$};
+  \node[box, fill=dec, text width=17mm, right=9mm of e2] (c2) {$P\,\ell(x')$\\{\scriptsize swap \FE/\BE}};
+  \node[box, fill=dec, text width=17mm, right=9mm of e3, dashed] (c3) {canonical\\frame};
+  % pooling
+  \node[box, fill=dec, text width=20mm, right=of c2] (pool) {mean over\\group $G$};
+  \node[box, fill=dec, text width=18mm, right=of pool] (arg) {$\arg\max$\\{\scriptsize $+\beta$ on \NEG}};
+  % outputs
+  \node[box, fill=io, text width=21mm, right=8mm of arg, yshift=9mm] (o1) {$\hat y(x)=y^\ast$};
+  \node[box, fill=io, text width=21mm, right=8mm of arg, yshift=-9mm] (o2) {$\hat y(x')=\rev(y^\ast)$};
+  % structural prior
+  \node[box, fill=prior, dashed, text width=40mm, above=5mm of arg, xshift=-12mm] (sp)
+    {structural prior (optional):\\twin present $\Rightarrow$ \{\EQ,\FE,\BE\}; absent $\Rightarrow$ \NEG};
+  % arrows
+  \draw[arr] (x1) -- (e1); \draw[arr] (x2) -- (e2); \draw[arr, dashed] (x3) -- (e3);
+  \draw[arr] (e1) -- (c1); \draw[arr] (e2) -- (c2); \draw[arr, dashed] (e3) -- (c3);
+  \draw[arr] (c1.east) -| ($(pool.north)+(-3mm,0)$);
+  \draw[arr] (c2) -- (pool);
+  \draw[arr, dashed] (c3.east) -| ($(pool.south)+(-3mm,0)$);
+  \draw[arr] (pool) -- node[above, font=\scriptsize] {$\bar\ell$} (arg);
+  \draw[arr] (arg.east) -- ++(3mm,0) |- (o1);
+  \draw[arr] (arg.east) -- ++(3mm,0) |- (o2);
+  \draw[arr, dashed] (sp) -- (arg);
+\end{tikzpicture}
+\caption{Consistency-aware decoding. Scores of an instance and its reversed
+twin (and, in T4, of other language views of the same source pair) are mapped
+into the \texttt{original} frame, averaged, and decoded once. The reversed row
+receives the reversed label, so the pair is consistent whenever it is not
+\NEG. The optional structural prior restricts the choice using the file layout.}
+\label{fig:overview}
+\end{figure*}
+
 \section{Task and Data}
 
 Each instance is an ordered pair $(a,b)$ of short phrases, about six words in
@@ -172,50 +217,6 @@ decoded file, which pools language views in T4. Any group holding both
 directions is $\rev$-consistent by construction. All per-track results in this
 report decode each track file on its own.
 
-\begin{figure*}[t]
-\centering
-\begin{tikzpicture}[node distance=5mm and 6mm]
-  % inputs
-  \node[box, fill=io, text width=22mm] (x1) {$x=(a,b)$\\\texttt{original}};
-  \node[box, fill=io, text width=22mm, below=6mm of x1] (x2) {$x'=(b,a)$\\\texttt{flipped}};
-  \node[box, fill=io, text width=22mm, below=6mm of x2, dashed] (x3) {other language\\views (T4)};
-  % encoder
-  \node[box, fill=enc, text width=24mm, right=of x1] (e1) {cross-encoder\\$\ell(x)$};
-  \node[box, fill=enc, text width=24mm, right=of x2] (e2) {cross-encoder\\$\ell(x')$};
-  \node[box, fill=enc, text width=24mm, right=of x3, dashed] (e3) {cross-encoder\\$\ell(\cdot)$};
-  \draw[dashed, gray] (e1) -- node[right, font=\scriptsize, text=black] {shared weights} (e2);
-  % canonical frame
-  \node[box, fill=dec, text width=17mm, right=9mm of e1] (c1) {$\ell(x)$};
-  \node[box, fill=dec, text width=17mm, right=9mm of e2] (c2) {$P\,\ell(x')$\\{\scriptsize swap \FE/\BE}};
-  \node[box, fill=dec, text width=17mm, right=9mm of e3, dashed] (c3) {canonical\\frame};
-  % pooling
-  \node[box, fill=dec, text width=20mm, right=of c2] (pool) {mean over\\group $G$};
-  \node[box, fill=dec, text width=18mm, right=of pool] (arg) {$\arg\max$\\{\scriptsize $+\beta$ on \NEG}};
-  % outputs
-  \node[box, fill=io, text width=21mm, right=8mm of arg, yshift=9mm] (o1) {$\hat y(x)=y^\ast$};
-  \node[box, fill=io, text width=21mm, right=8mm of arg, yshift=-9mm] (o2) {$\hat y(x')=\rev(y^\ast)$};
-  % structural prior
-  \node[box, fill=prior, dashed, text width=40mm, above=5mm of arg, xshift=-12mm] (sp)
-    {structural prior (optional):\\twin present $\Rightarrow$ \{\EQ,\FE,\BE\}; absent $\Rightarrow$ \NEG};
-  % arrows
-  \draw[arr] (x1) -- (e1); \draw[arr] (x2) -- (e2); \draw[arr, dashed] (x3) -- (e3);
-  \draw[arr] (e1) -- (c1); \draw[arr] (e2) -- (c2); \draw[arr, dashed] (e3) -- (c3);
-  \draw[arr] (c1.east) -| ($(pool.north)+(-3mm,0)$);
-  \draw[arr] (c2) -- (pool);
-  \draw[arr, dashed] (c3.east) -| ($(pool.south)+(-3mm,0)$);
-  \draw[arr] (pool) -- node[above, font=\scriptsize] {$\bar\ell$} (arg);
-  \draw[arr] (arg.east) -- ++(3mm,0) |- (o1);
-  \draw[arr] (arg.east) -- ++(3mm,0) |- (o2);
-  \draw[arr, dashed] (sp) -- (arg);
-\end{tikzpicture}
-\caption{Consistency-aware decoding. Scores of an instance and its reversed
-twin (and, in T4, of other language views of the same source pair) are mapped
-into the \texttt{original} frame, averaged, and decoded once. The reversed row
-receives the reversed label, so the pair is consistent whenever it is not
-\NEG. The optional structural prior restricts the choice using the file layout.}
-\label{fig:overview}
-\end{figure*}
-
 \subsection{Symmetric architecture}
 Decoding gives consistency only when both directions are in the input. We
 also built a model that is consistent for any single input. It scores both
@@ -227,27 +228,7 @@ so $g(b,a)=P\,g(a,b)$ holds exactly (Fig.~\ref{fig:symmetric}). The cost is
 two forward passes per example. A unit test checks the identity to within
 $10^{-5}$.
 
-\begin{figure}[t]
-\centering
-\begin{tikzpicture}[node distance=4mm and 5mm]
-  \node[box, fill=io, text width=15mm] (ab) {$(a,b)$};
-  \node[box, fill=io, text width=15mm, right=12mm of ab] (ba) {$(b,a)$};
-  \node[box, fill=enc, text width=15mm, below=of ab] (f1) {encoder $f$};
-  \node[box, fill=enc, text width=15mm, below=of ba] (f2) {encoder $f$};
-  \draw[dashed, gray] (f1) -- node[above, font=\scriptsize, text=black] {tied} (f2);
-  \node[box, fill=dec, text width=15mm, below=of f1] (l1) {$f(a,b)$};
-  \node[box, fill=dec, text width=15mm, below=of f2] (l2) {$P\,f(b,a)$};
-  \node[box, fill=dec, text width=30mm, below=5mm of $(l1.south)!0.5!(l2.south)$] (avg)
-    {$g(a,b)=\tfrac12\bigl(f(a,b)+P f(b,a)\bigr)$};
-  \draw[arr] (ab) -- (f1); \draw[arr] (ba) -- (f2);
-  \draw[arr] (f1) -- (l1); \draw[arr] (f2) -- (l2);
-  \draw[arr] (l1) -- (avg); \draw[arr] (l2) -- (avg);
-\end{tikzpicture}
-\caption{The symmetric model scores both input orders with one encoder and
-averages the results after swapping \FE{} and \BE{} on the reversed side.
-Swapping $a$ and $b$ therefore swaps \FE{} and \BE{} in the output exactly.}
-\label{fig:symmetric}
-\end{figure}
+
 
 \subsection{Training objectives}
 The loss is cross-entropy, optionally with label smoothing~\cite{szegedy2016rethinking},
@@ -272,6 +253,30 @@ three reversible labels only, since under the prior the model is never asked
 about \NEG; they must not be used without it.
 
 \section{Experimental Setup}
+% Held until the next column break (page 3) so it does not share a page with Fig.~1.
+\afterpage{%
+\begin{figure}[!t]
+\centering
+\begin{tikzpicture}[node distance=4mm and 5mm]
+  \node[box, fill=io, text width=15mm] (ab) {$(a,b)$};
+  \node[box, fill=io, text width=15mm, right=12mm of ab] (ba) {$(b,a)$};
+  \node[box, fill=enc, text width=15mm, below=of ab] (f1) {encoder $f$};
+  \node[box, fill=enc, text width=15mm, below=of ba] (f2) {encoder $f$};
+  \draw[dashed, gray] (f1) -- node[above, font=\scriptsize, text=black] {tied} (f2);
+  \node[box, fill=dec, text width=15mm, below=of f1] (l1) {$f(a,b)$};
+  \node[box, fill=dec, text width=15mm, below=of f2] (l2) {$P\,f(b,a)$};
+  \node[box, fill=dec, text width=30mm, below=5mm of $(l1.south)!0.5!(l2.south)$] (avg)
+    {$g(a,b)=\tfrac12\bigl(f(a,b)+P f(b,a)\bigr)$};
+  \draw[arr] (ab) -- (f1); \draw[arr] (ba) -- (f2);
+  \draw[arr] (f1) -- (l1); \draw[arr] (f2) -- (l2);
+  \draw[arr] (l1) -- (avg); \draw[arr] (l2) -- (avg);
+\end{tikzpicture}
+\caption{The symmetric model scores both input orders with one encoder and
+averages the results after swapping \FE{} and \BE{} on the reversed side.
+Swapping $a$ and $b$ therefore swaps \FE{} and \BE{} in the output exactly.}
+\label{fig:symmetric}
+\end{figure}
+}
 
 All models were trained on one NVIDIA RTX~4000~Ada (20\,GB) with mixed
 precision, AdamW~\cite{loshchilov2019decoupled}, 10\% linear warm-up and linear
