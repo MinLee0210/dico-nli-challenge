@@ -32,6 +32,7 @@ from src.augment import augment
 from src.callbacks.wandb_callback import WandbCallback
 from src.config import ModelConfig
 from src.data import DicoDataset, PairCollator, TwinBatchSampler, read_dico_files
+from src.labels import NEGATIVE_ID
 from src.modules.loss import DicoLoss
 from src.modules.model import PairClassifier, build_tokenizer, model_inputs
 from src.pipelines._utils import announce_training
@@ -127,7 +128,7 @@ def build_callbacks(
                 entity=wb.get("entity"),
                 monitor=wb.get("monitor", train_cfg.best_metric),
                 mode=wb.get("mode", train_cfg.best_mode),
-                log_artifacts=wb.get("log_artifacts", True),
+                log_artifacts=wb.get("log_artifacts", False),
                 group=wb.get("group"),
             )
         )
@@ -140,12 +141,15 @@ def build_loaders(
     tokenizer,
     max_length: int,
     device: torch.device,
+    symmetric: bool = False,
 ) -> tuple[DataLoader, Optional[DataLoader], Optional[DataLoader], DicoDataset]:
     """Returns (train_loader, val_loader, test_loader, train_dataset)."""
     train_paths = _paths(train_cfg.data_root, train_cfg.train_files)
     if not train_paths:
         raise ValueError("train_files must list at least one file")
     train_examples = read_dico_files(train_paths)
+    if train_cfg.drop_negatives:
+        train_examples = [ex for ex in train_examples if ex.label_id != NEGATIVE_ID]
     if train_cfg.augment:
         n = len(train_examples)
         train_examples = augment(train_examples, train_cfg.augment)
@@ -167,17 +171,21 @@ def build_loaders(
             shuffle=False,
             num_workers=train_cfg.num_workers,
             pin_memory=pin_memory,
-            collate_fn=PairCollator(dataset, tokenizer, max_length),
+            collate_fn=PairCollator(dataset, tokenizer, max_length, symmetric),
         )
 
     train_loader = DataLoader(
         train_dataset,
         batch_sampler=TwinBatchSampler(
-            train_dataset, train_cfg.batch_size, shuffle=True, seed=train_cfg.seed
+            train_dataset,
+            train_cfg.batch_size,
+            shuffle=True,
+            seed=train_cfg.seed,
+            fraction=train_cfg.epoch_fraction,
         ),
         num_workers=train_cfg.num_workers,
         pin_memory=pin_memory,
-        collate_fn=PairCollator(train_dataset, tokenizer, max_length),
+        collate_fn=PairCollator(train_dataset, tokenizer, max_length, symmetric),
     )
     return (
         train_loader,
@@ -306,7 +314,7 @@ def train(
     )
     tokenizer = tokenizer if tokenizer is not None else build_tokenizer(model_cfg)
     train_loader, val_loader, test_loader, train_dataset = build_loaders(
-        train_cfg, tokenizer, model_cfg.max_length, device
+        train_cfg, tokenizer, model_cfg.max_length, device, model_cfg.symmetric
     )
     print(f"train examples: {len(train_dataset)}  backbone: {model_cfg.backbone}")
 
@@ -314,6 +322,8 @@ def train(
     criterion = DicoLoss(
         label_smoothing=train_cfg.label_smoothing,
         consistency_weight=train_cfg.consistency_weight,
+        class_weights=train_cfg.class_weights,
+        focal_gamma=train_cfg.focal_gamma,
     ).to(device)
     optimizer = build_optimizer(model, train_cfg)
     scaler = torch.amp.GradScaler(

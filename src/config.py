@@ -34,6 +34,10 @@ class ModelConfig:
     # Rebuild the tokenizer's pair template from the model config's CLS/SEP
     # ids, for checkpoints whose post-processor is broken (HiTZ/JaunBERT).
     fix_pair_template: bool = False
+    # Reversal-equivariant model: score (a, b) and (b, a) with the shared
+    # encoder and return 0.5 * (f(a, b) + Rev f(b, a)), so f(b, a) = Rev f(a, b)
+    # holds exactly. Costs 2x compute; needs `with_swap` batches.
+    symmetric: bool = False
 
     def __post_init__(self) -> None:
         if not self.backbone:

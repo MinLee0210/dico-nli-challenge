@@ -24,7 +24,7 @@ def load_env(env_file: Union[str, Path] = ".env") -> None:
 
 def save_checkpoint(
     model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: Optional[torch.optim.Optimizer],
     step: int,
     path: Union[str, Path],
     extra: Optional[Dict[str, Any]] = None,
@@ -37,10 +37,11 @@ def save_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint = {
         "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
         "step": step,
         "extra": extra or {},
     }
+    if optimizer is not None:  # best.pt is weights-only: 3x smaller on disk
+        checkpoint["optimizer"] = optimizer.state_dict()
     torch.save(checkpoint, path)
 
 

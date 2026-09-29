@@ -31,7 +31,7 @@ class WandbCallback(Callback):
         entity: Optional[str] = None,
         monitor: str = "val_loss",
         mode: str = "min",
-        log_artifacts: bool = True,
+        log_artifacts: bool = False,
         group: Optional[str] = None,
     ):
         assert mode in ("min", "max"), f"mode must be 'min' or 'max', got {mode!r}"

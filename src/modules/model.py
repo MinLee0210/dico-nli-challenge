@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 
 from src.config import ModelConfig
-from src.labels import ID2LABEL, LABEL2ID
+from src.labels import ID2LABEL, LABEL2ID, REVERSE_PERM
 
 # Config attributes that control head dropout across backbone families
 # (BERT/RoBERTa/XLM-R: classifier_dropout; DeBERTa-v2/v3: cls_dropout;
@@ -68,9 +68,13 @@ def build_hf_model(cfg: ModelConfig) -> nn.Module:
             if hasattr(hf_cfg, attr):
                 setattr(hf_cfg, attr, cfg.classifier_dropout)
     # Checkpoints fine-tuned on 3-way NLI ship a head of a different shape;
-    # re-initialise it for our 4 labels.
+    # re-initialise it for our 4 labels. Load fp32 master weights: transformers 5
+    # defaults to the checkpoint dtype, which breaks the fp16 GradScaler.
     return AutoModelForSequenceClassification.from_pretrained(
-        cfg.backbone, config=hf_cfg, ignore_mismatched_sizes=True
+        cfg.backbone,
+        config=hf_cfg,
+        ignore_mismatched_sizes=True,
+        dtype=torch.float32,
     )
 
 
@@ -87,17 +91,38 @@ class PairClassifier(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         token_type_ids: Optional[torch.Tensor] = None,
+        sw_input_ids: Optional[torch.Tensor] = None,
+        sw_attention_mask: Optional[torch.Tensor] = None,
+        sw_token_type_ids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Returns (logits (B, num_labels), feature (B, hidden))."""
+        """Returns (logits (B, num_labels), feature (B, hidden)).
+
+        With `cfg.symmetric` and the swapped encoding given, logits are
+        0.5 * (f(a, b) + Rev f(b, a)): exactly reversal-equivariant.
+        """
         kwargs = {"input_ids": input_ids, "attention_mask": attention_mask}
         if token_type_ids is not None:
             kwargs["token_type_ids"] = token_type_ids
         out = self.hf(**kwargs, output_hidden_states=True)
         feature = out.hidden_states[-1][:, 0]
-        return out.logits, feature
+        logits = out.logits
+        if self.cfg.symmetric and sw_input_ids is not None:
+            sw_kwargs = {"input_ids": sw_input_ids, "attention_mask": sw_attention_mask}
+            if sw_token_type_ids is not None:
+                sw_kwargs["token_type_ids"] = sw_token_type_ids
+            sw_logits = self.hf(**sw_kwargs).logits
+            logits = 0.5 * (logits + sw_logits[..., list(REVERSE_PERM)])
+        return logits, feature
 
 
-MODEL_INPUT_KEYS = ("input_ids", "attention_mask", "token_type_ids")
+MODEL_INPUT_KEYS = (
+    "input_ids",
+    "attention_mask",
+    "token_type_ids",
+    "sw_input_ids",
+    "sw_attention_mask",
+    "sw_token_type_ids",
+)
 
 
 def model_inputs(batch: dict, device: torch.device) -> dict:

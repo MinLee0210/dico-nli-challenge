@@ -39,3 +39,18 @@ def test_dico_loss_adds_weighted_consistency():
     assert weighted.item() >= plain.item()
     weighted.backward()
     assert logits.grad is not None
+
+
+def test_weighted_and_focal_loss():
+    import torch
+
+    from src.modules.loss import DicoLoss
+
+    logits = torch.tensor([[2.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
+    labels = torch.tensor([0, 3])
+    plain = DicoLoss()(logits, labels)
+    assert torch.isclose(DicoLoss(class_weights=[1, 1, 1, 1])(logits, labels), plain)
+    # Up-weighting the second row's class moves the weighted mean towards its loss.
+    assert DicoLoss(class_weights=[1, 1, 1, 3])(logits, labels) > plain
+    # Focal loss down-weights confident rows, so it is below plain CE.
+    assert DicoLoss(focal_gamma=2.0)(logits, labels) < plain

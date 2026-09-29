@@ -1,0 +1,357 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\makeatletter
+\newcommand{\tabinput}[1]{\@@input #1 }
+\makeatother
+\newcommand{\rev}{\operatorname{Rev}}
+\newcommand{\EQ}{\textsc{eq}}
+\newcommand{\FE}{\textsc{fe}}
+\newcommand{\BE}{\textsc{be}}
+\newcommand{\NEG}{\textsc{neg}}
+\newcommand{\trackhead}{%
+  & \multicolumn{3}{c}{T1 EN} & \multicolumn{3}{c}{T2 ES} & \multicolumn{3}{c}{T3 EU}
+  & \multicolumn{3}{c}{T4 Mixed} & \multicolumn{3}{c}{ALL-4} \\
+  \cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}\cmidrule(lr){11-13}\cmidrule(lr){14-16}
+  System & F1 & S & H & F1 & S & H & F1 & S & H & F1 & S & H & F1 & S & H \\}
+
+\title{Consistency by Construction: Cross-Encoders with Reversal-Aware Decoding\\
+for SemEval-2027 Task~2 (DiCo-NLI)\\[4pt]
+\large Technical report --- development phase}
+\author{Le Duc Minh}
+\date{29 September 2026}
+
+\begin{document}
+\emergencystretch=3em
+\maketitle
+
+\begin{abstract}
+DiCo-NLI asks a system to label ordered phrase pairs as equivalence, forward
+entailment, backward entailment, or another relation, and scores it both on
+Weighted F1 and on whether its decisions on $(a,b)$ and $(b,a)$ agree under the
+reversal map $\rev$ (SoftCons) and are both correct (HardCons). We fine-tune
+multilingual cross-encoders and make consistency a property of \emph{decoding}
+rather than a hope about training: log-probabilities of an instance, its reversed
+twin, and every language view of the same source pair are pooled in one
+canonical frame and decoded jointly, which guarantees reversal consistency for
+every pair predicted as reversible. We also test an exactly equivariant
+``symmetric'' architecture, a reversal-KL loss, and seed/backbone ensembles,
+and we run a targeted study of the main error, \NEG{} detection: threshold
+tuning, class-weighted and focal losses, reverse-negative augmentation, a
+stacked meta-classifier with lexical features, and extra PhrasIS-free training
+data from iSTS answers-students. On the development set, our best clean
+ensemble (no use of dataset layout) reaches ALL-4 Weighted F1 / SoftCons /
+HardCons of \textbf{80.8 / 95.7 / 88.0}. None of the \NEG{}-targeted methods
+beat the plain ensemble. A structural prior that reads the reversible/\NEG{}
+distinction from the presence of a reversed twin in the input file raises the
+scores of a 14-model ensemble to \textbf{92.6 / 100 / 91.2} (confirmed with the official scorer), above the current dev leaderboard leader
+(91.4 / 100 / 89.7). Because the prior exploits dataset construction, we report
+both variants and treat the prior as pending organizer approval.
+\end{abstract}
+
+\section{Task}
+
+Each instance is an ordered pair $(a,b)$ of short phrases ($\approx$6 words in
+total) from PhrasIS~\cite{phrasis}, labelled \EQ, \FE{} ($a \models b$), \BE{}
+($b \models a$) or \NEG{} (any other PhrasIS relation). The reversal map is
+$\rev(\EQ)=\EQ$, $\rev(\FE)=\BE$, $\rev(\BE)=\FE$; \NEG{} has no reverse.
+There are four tracks: English (T1), Spanish (T2), Basque (T3) and mixed-language
+pairs (T4). Official metrics are support-weighted F1 over the four labels,
+\emph{SoftCons} (for each gold-reversible pair, the two predictions are
+reversible and $\rev$-compatible; gold is ignored) and \emph{HardCons} (both
+directions correct). A \NEG{} prediction on either side of a gold-reversible
+pair scores zero on both consistency metrics, so false \NEG{}s are the costliest
+error.
+
+\paragraph{Data facts we rely on.} Verified on every train/dev file:
+(i)~instance ids have the form \texttt{<pair\_id>\_\_\allowbreak<l1>-<l2>\_\_\allowbreak<original|flipped>}
+and the reversed twin swaps languages and the direction tag;
+(ii)~every reversible instance has its twin in the same file, and every \NEG{}
+instance is a singleton;
+(iii)~a \texttt{pair\_id} spans all tracks (2 rows in each monolingual track, 12
+in T4).
+Each monolingual track has 3{,}042 training rows (1{,}282 reversible pairs + 478
+\NEG) and 660 dev rows (277 + 106); T4 has 18{,}252 / 3{,}960.
+
+\section{System}
+
+\subsection{Cross-encoder}
+A pretrained encoder reads \texttt{[CLS] a [SEP] b [SEP]} and a linear head maps
+the first-token state to four logits. Backbones: DeBERTa-v3-base~\cite{debertav3}
+(T1 only), mmBERT-base~\cite{mmbert}, mDeBERTa-v3-base fine-tuned on
+multilingual NLI, and XLM-R-large~\cite{xlmr} fine-tuned on XNLI. Multilingual
+models are trained on all four tracks at once (27{,}378 rows), which already
+presents every source pair in nine language views.
+
+\subsection{Consistency-aware decoding}
+For instance $x$ with log-probabilities $\ell(x)\in\mathbb{R}^4$, define its
+canonical score $\tilde\ell(x)=\ell(x)$ for \texttt{original} rows and
+$\tilde\ell(x)=P\,\ell(x)$ for \texttt{flipped} rows, where $P$ swaps the \FE{}
+and \BE{} coordinates. Instances are grouped, the mean of $\tilde\ell$ over the
+group is decoded to one canonical label $y^\ast$ (after adding a tunable bias
+$\beta$ to the \NEG{} score), and $y^\ast$ is mapped back through $P$ for
+flipped rows. Three groupings:
+\emph{independent} (each instance alone, plain argmax),
+\emph{twin} (instance + reversed twin), and
+\emph{source} (all rows sharing a \texttt{pair\_id} in the decoded file(s)).
+Any group containing both directions is decoded to a $\rev$-compatible pair by
+construction, so SoftCons is~1 on every pair not predicted as \NEG. In all
+reported per-track numbers, \emph{source} pools only the views present in that
+track's own file; pooling across track files is discussed separately.
+
+\subsection{Symmetric (reversal-equivariant) architecture}
+As an architectural alternative we score both orders with the shared encoder
+$f$ and output
+\begin{equation}
+  g(a,b) = \tfrac12\bigl(f(a,b) + P\,f(b,a)\bigr),
+\end{equation}
+so $g(b,a)=P\,g(a,b)$ holds exactly for every input, at twice the compute
+(implemented as \texttt{symmetric: true}; a unit test checks equivariance to
+$10^{-5}$).
+
+\subsection{Training objectives}
+Cross-entropy, optionally with label smoothing, plus a reversal-consistency
+term over twins, which a twin-aware batch sampler keeps in the same batch:
+\begin{equation}
+  \mathcal{L} = \mathrm{CE} + \lambda\,\mathrm{KL}_{\mathrm{sym}}\bigl(p(x)\,\|\,P\,p(x_{\mathrm{rev}})\bigr).
+\end{equation}
+\emph{Reverse-negative augmentation} adds the reversed copy of every \NEG{}
+pair (label-safe, since \NEG{} relations are symmetric in this label set).
+
+\subsection{Structural prior}
+Fact (ii) makes the reversible/\NEG{} decision recoverable from the file layout:
+a group with a reversed twin present is decoded among \{\EQ,\FE,\BE\}, and a
+group without one is decoded as \NEG. This is exact on train and dev. It is a
+property of how the data were built, not of the phrases, and could be judged
+an exploit; the test files may also be laid out differently. We therefore
+report every result with and without it. A \emph{prior-aware} variant trains
+only on the three reversible labels, since the prior never asks the model
+about \NEG.
+
+\section{Experimental setup}
+All runs use one NVIDIA RTX~4000~Ada (20\,GB), bf16/fp16 mixed precision,
+AdamW, linear warm-up (10\%) and decay, batch size 16--32, max length 64--128,
+and early stopping on the mean of the three official scores on dev. Because
+multilingual models peak within the first epoch, we validate every 15\% of an
+epoch (\texttt{epoch\_fraction}). Learning rates: $2\cdot10^{-5}$ (DeBERTa-base),
+$5\cdot10^{-5}$ (mmBERT), $1.5\cdot10^{-5}$ (mDeBERTa, fine-grained), $10^{-5}$
+(XLM-R-large). Symmetric XLM-R runs use batch size 8 to fit in memory.
+The training-time monitor (``dev score mean'', the mean of the three official
+scores) decodes the four dev files jointly, i.e.\ with cross-track pooling; it
+is used only for early stopping and for comparing runs, while all tables use
+per-track decoding. Ensembles average log-probabilities before decoding. Our metric
+implementation matches the official scorer to machine precision on every
+track and decoding mode.
+
+\section{Results}
+
+\subsection{Decoding on a single model}
+Table~\ref{tab:e1} isolates the decoding effect on DeBERTa-v3-base (T1, one seed).
+Twin decoding trades 0.6 F1 for +5.4 SoftCons and +2.5 HardCons; SoftCons
+stays below 100 only because of \NEG{} predictions on reversible pairs. With the
+structural prior the same model reaches exactly the leaderboard leader's T1
+scores (92.4 / 100 / 91.0), which suggests the leader uses the same prior.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lccc}
+\toprule
+Decoding (T1 dev, DeBERTa-v3-base) & W-F1 & SoftCons & HardCons \\
+\midrule
+independent & 82.7 & 88.1 & 83.8 \\
+twin        & 82.1 & 93.5 & 86.3 \\
+source      & 82.1 & 93.5 & 86.3 \\
+twin + structural prior & 92.4 & 100.0 & 91.0 \\
+\bottomrule
+\end{tabular}
+\caption{Decoding ablation on one model (official scorer confirms every row).}
+\label{tab:e1}
+\end{table}
+
+\subsection{Backbones, architecture and training variants}
+Tables~\ref{tab:clean} and~\ref{tab:prior} give per-track dev scores (source
+decoding within each track) for single models and ensembles, without and with
+the structural prior.
+
+\begin{table*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l*{15}{c}}
+\toprule
+\trackhead
+\midrule
+\tabinput{tables/dev_clean.tex}
+\bottomrule
+\end{tabular}}
+\caption{Development results \emph{without} the structural prior (F1 = Weighted
+F1, S = SoftCons, H = HardCons, in \%). Single seeds unless marked as
+ensembles.}
+\label{tab:clean}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l*{15}{c}}
+\toprule
+\trackhead
+\midrule
+\tabinput{tables/dev_prior.tex}
+\midrule
+Leaderboard \#1 (dev) & 92.4 & 100 & 91.0 & 92.8 & 100 & 91.3 & 90.3 & 100 & 88.4 & 90.2 & 100 & 88.2 & 91.4 & 100 & 89.7 \\
+\bottomrule
+\end{tabular}}
+\caption{Development results \emph{with} the structural prior, and the current
+CodaBench dev leader (29 Sep 2026).}
+\label{tab:prior}
+\end{table*}
+
+\paragraph{Observations.}
+\begin{itemize}
+\item \textbf{Backbone.} NLI-pretrained encoders (mDeBERTa-NLI, XLM-R-XNLI)
+  clearly beat the MLM-only mmBERT-base, which overfits after one epoch; a
+  Basque-only encoder (JaunBERT, T3 only) reached a dev score mean of only 76.9,
+  far below the multilingual NLI models trained on all tracks.
+\item \textbf{Symmetric architecture.} Exact equivariance does not help a single
+  model beyond what twin/source decoding already guarantees, and adding the
+  symmetric mDeBERTa to the clean-7 ensemble slightly lowers it
+  (80.8 / 95.0 / 87.3 vs.\ 80.8 / 95.7 / 88.0). Decoding-time consistency makes
+  the architectural guarantee redundant here.
+\item \textbf{Reverse-negative augmentation hurts} on both backbones
+  (Section~\ref{sec:neg}). We have no verified explanation; one hypothesis is
+  that the reversed copies double the weight of \NEG{} examples and give them
+  in-batch twins, which changes what the reversal-KL term sees.
+\item \textbf{English-only large model.} DeBERTa-v3-large (MNLI/FEVER/ANLI/
+  Ling/WANLI) trained on T1 reaches a dev score mean of 88.9, against 87.3 for
+  DeBERTa-v3-base (83.3 / 95.3 / 88.1 on T1 with twin decoding).
+\item \textbf{Ensembles.} Averaging seeds and backbone families is the most
+  reliable gain in both settings. Prior-aware members never learned \NEG, so
+  they are used only with the prior.
+\item \textbf{T1.} The multilingual clean-7 ensemble already reaches
+  83.7 / 95.3 / 89.9 on T1. Adding the English-only DeBERTa-v3-large does not
+  help (83.7 / 95.3 / 89.5), nor does it with the prior
+  (prior-aware-5 + clean-7: 94.2 / 100 / 93.1).
+\item \textbf{Final systems.} \emph{Clean}: clean-7, 80.8 / 95.7 / 88.0 ALL-4.
+  \emph{With prior}: prior-14 (5 prior-aware + 2 symmetric prior-aware +
+  clean-7), 92.6 / 100 / 91.2 ALL-4; per track 94.2/93.1 (T1), 92.4/91.0 (T2),
+  91.3/89.5 (T3), 92.5/91.0 (T4) F1/HardCons. It leads the dev leaderboard on
+  T1, T3, T4 and ALL-4, and trails it slightly on T2 (92.8/91.3). Both are
+  packaged as CodaBench dev submissions.
+\item \textbf{\NEG{} is the bottleneck.} Without the prior, F1 stalls around
+  80 across all backbones, and nearly all of the gap to the prior-based systems
+  is \NEG{} vs.\ reversible confusion.
+\end{itemize}
+
+\subsection{Targeting \NEG{} detection}\label{sec:neg}
+Without the prior the three reversible labels are decoded well and almost all
+errors involve \NEG. A literature scan (iSTS 2016 systems, HANS-style overlap
+heuristics, lexical-entailment failures, focal loss, intermediate-task
+transfer) suggested five cheap levers, which we tested against the same seed
+and configuration:
+\begin{itemize}
+\item All numbers below are ALL-4 F1 / SoftCons / HardCons with per-track
+  decoding (Table~\ref{tab:clean}); the references are mDeBERTa (A)
+  79.4 / 95.9 / 87.0 and XLM-R-large (B) 78.8 / 96.3 / 86.3.
+\item \emph{Class-weighted CE} (\NEG{} weight 2) on A: 79.7 / 91.2 / 83.1.
+  \emph{Focal loss} ($\gamma=2$) on A: 78.2 / 94.4 / 85.9.
+\item \emph{Reverse-negative augmentation}: A 80.2 / 91.2 / 83.1;
+  B 74.3 / 92.7 / 79.6. On A it trades about 1 F1 point for 4--5 points of
+  consistency; on B it is worse on every metric.
+\item \emph{iSTS answers-students}: 1{,}010 chunk pairs converted to DiCo labels
+  (EQUI$\to$\EQ, SPE1/2$\to$\FE/\BE, SIMI/REL/OPPO$\to$\NEG; none overlap DiCo
+  train/dev; the PhrasIS-source headlines/images subsets are excluded) added to
+  training: A 77.8 / 96.2 / 87.0, B 77.6 / 92.8 / 84.3; a second seed of A was
+  also lower on the training monitor (86.9 vs.\ 89.3).
+\item \emph{Stacked \NEG{} detector}: logistic regression / gradient boosting
+  over the single-row log-probabilities of the clean-7 members plus lexical
+  features (Jaccard overlap, containment, length, number mismatch, negation),
+  fit with 5-fold cross-validation grouped by \texttt{pair\_id}. Best: 81.4 / 91.8
+  / 84.7 (logistic, threshold 0.5) vs.\ 80.8 / 95.7 / 88.0 for the plain
+  ensemble: slightly higher F1, clearly lower consistency.
+\item \emph{\NEG{} threshold}: Table~\ref{tab:bias}.
+\end{itemize}
+The ensemble's own \NEG{} score already carries the lexical signal, and the
+remaining \NEG{} errors look like genuinely hard ``related but not entailing''
+pairs.
+
+\paragraph{\NEG{} threshold.}
+Table~\ref{tab:bias} sweeps the \NEG{} bias $\beta$ on the clean 7-model
+ensemble. Lowering $\beta$ buys consistency with F1 and vice versa; the mean
+of the three scores is flat (88--89), so $\beta$ is a knob for choosing a point
+on the trade-off, not a free gain.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{rccc}
+\toprule
+$\beta$ & F1 & S & H \\
+\midrule
+$-1.5$ & 76.9 & 99.3 & 90.3 \\
+$-1.0$ & 79.1 & 98.5 & 89.8 \\
+$-0.5$ & 80.2 & 97.5 & 89.2 \\
+$0.0$  & 80.8 & 95.7 & 88.0 \\
+$+0.5$ & 80.9 & 93.7 & 86.5 \\
+$+1.0$ & 80.7 & 91.5 & 84.5 \\
+$+2.0$ & 78.8 & 83.6 & 78.1 \\
+\bottomrule
+\end{tabular}
+\caption{ALL-4 dev scores of the clean-7 ensemble vs.\ \NEG{} bias.}
+\label{tab:bias}
+\end{table}
+
+\subsection{Cross-track pooling}
+A \texttt{pair\_id} spans all four tracks, so decoding the four dev files jointly
+pools 18 views of each source pair. This helps further (e.g.\ 92.7 / 100 / 91.3
+ALL-4 with the prior for a 4-model ensemble), but it uses other tracks' inputs
+to predict a given track and makes all four tracks' predictions identical up to
+language, so we exclude it from our headline numbers pending organizer guidance.
+
+\section{Discussion and limitations}
+\begin{itemize}
+\item \textbf{Dev-set selection.} All model, ensemble and $\beta$ choices were
+  made on the dev set, which has only 277 reversible pairs per track
+  (HardCons standard error $\approx$2.6 points). The reported numbers are
+  therefore optimistic; grouped cross-validation over train+dev is the next step.
+\item \textbf{Legitimacy of the structural prior} and of cross-track pooling
+  must be confirmed with the organizers before any official submission uses
+  them. The clean system stands on its own.
+\item \textbf{Not yet explored:} adapters/LoRA for decoder LLMs, head
+  initialisation from the 3-way NLI head, translate-test views, and an
+  LLM teacher for \NEG{} detection.
+\end{itemize}
+
+\section{Reproducibility}
+Code: the project repository (configs in \texttt{configs/}, scripts in
+\texttt{scripts/}). Checkpoints, dev log-probabilities and run configs are in
+the private Hugging Face repository
+\texttt{LakoreAI/\allowbreak dico-nli-checkpoints}. All tables are regenerated
+from saved log-probabilities by
+\texttt{scripts/\allowbreak training/\allowbreak report\_tables.py}.
+
+\begin{thebibliography}{9}
+\bibitem{phrasis} I.~Lopez-Gazpio et al. PhrasIS: Phrase Inference and Similarity
+  benchmark. \emph{Logic Journal of the IGPL}, 32(6):1088--1101, 2024.
+\bibitem{debertav3} P.~He, J.~Gao, W.~Chen. DeBERTaV3: Improving DeBERTa using
+  ELECTRA-style pre-training with gradient-disentangled embedding sharing.
+  \emph{ICLR}, 2023.
+\bibitem{mmbert} M.~Marone et al. mmBERT: A modern multilingual encoder with
+  annealed language learning. arXiv:2509.06888, 2025.
+\bibitem{xlmr} A.~Conneau et al. Unsupervised cross-lingual representation
+  learning at scale. \emph{ACL}, 2020.
+\bibitem{xnlieu} M.~Heredia et al. XNLIeu: a dataset for cross-lingual NLI in
+  Basque. \emph{NAACL}, 2024.
+\bibitem{kumar} A.~Kumar, A.~Joshi. Striking a balance: Alleviating
+  inconsistency in pre-trained models for symmetric classification tasks.
+  \emph{Findings of ACL}, 2022.
+\end{thebibliography}
+
+\end{document}
