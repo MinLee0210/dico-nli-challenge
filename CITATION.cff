@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use this code, models or results, please cite it as below."
+title: "Consistency by Construction: Cross-Encoders with Reversal-Aware Decoding for SemEval-2027 Task 2 (DiCo-NLI)"
+type: software
+authors:
+  - family-names: "Le"
+    given-names: "Duc Minh"
+version: "0.1.0"
+date-released: "2026-09-29"
+license: MIT
+repository-code: "https://github.com/MinLee0210/dico-nli-challenge"
+keywords:
+  - natural language inference
+  - directional consistency
+  - cross-encoder
+  - multilingual
+  - Basque
+  - SemEval-2027
+abstract: >-
+  A config-driven system for SemEval-2027 Task 2 (DiCo-NLI): multilingual
+  cross-encoders with consistency-aware decoding that pools the
+  log-probabilities of a phrase pair, its reversed twin and its language views
+  in one canonical frame, guaranteeing reversal consistency for every pair
+  predicted as reversible. Includes an exactly reversal-equivariant model
+  option, ensembling tools, a study of NEGATIVE_OTHER detection, and a
+  technical report.
+references:
+  - type: article
+    title: "PhrasIS: Phrase Inference and Similarity benchmark"
+    authors:
+      - family-names: "Lopez-Gazpio"
+        given-names: "Iñigo"
+    journal: "Logic Journal of the IGPL"
+    volume: 32
+    issue: 6
+    start: 1088
+    end: 1101
+    year: 2024

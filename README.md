@@ -27,6 +27,8 @@ twins, or of every language view of a source pair). Research notes are in
 - [Evaluation, prediction, submission](#evaluation-prediction-submission)
 - [Repository layout](#repository-layout)
 - [Configuration](#configuration)
+- [Results, report, model card](#results-report-model-card)
+- [Citation](#citation)
 - [License](#license)
 
 ## Quickstart
@@ -211,6 +213,35 @@ best_metric: dico_mean           # or weighted_f1 / soft_cons / hard_cons / val_
 augment: [reverse_negatives]     # train-only augmentation (src/augment.py)
 arch: {backbone: microsoft/deberta-v3-base, max_length: 128}
 # arch: {backbone: HiTZ/JaunBERT, fix_pair_template: true}  # repair a broken pair template
+```
+
+## Results, report, model card
+
+- Technical report: [`docs/report/dico_nli_report.pdf`](docs/report/dico_nli_report.pdf)
+  (source `.tex` alongside; tables from `scripts/training/report_tables.py`).
+- Model card: [`docs/report/MODEL_CARD.md`](docs/report/MODEL_CARD.md). Checkpoints
+  are in the private Hugging Face repo `LakoreAI/dico-nli-checkpoints`.
+- Run log: [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md).
+
+Dev-set ALL-4 Weighted F1 / SoftCons / HardCons: clean-7 ensemble
+80.8 / 95.7 / 88.0; with the structural prior (pending organizer approval)
+92.6 / 100 / 91.2.
+
+## Citation
+
+If you use this code, models or results, please cite (GitHub's "Cite this
+repository" button reads [`CITATION.cff`](CITATION.cff)):
+
+```bibtex
+@software{le2026diconli,
+  author  = {Le, Duc Minh},
+  title   = {Consistency by Construction: Cross-Encoders with Reversal-Aware
+             Decoding for {SemEval-2027} Task 2 ({DiCo-NLI})},
+  year    = {2026},
+  version = {0.1.0},
+  url     = {https://github.com/MinLee0210/dico-nli-challenge},
+  note    = {Technical report, development phase}
+}
 ```
 
 ## License
