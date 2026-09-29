@@ -42,6 +42,8 @@ class TrainingConfig:
     num_workers: int = 0
     pin_memory: bool = False
     amp: bool = False
+    # Autocast dtype when `amp`: "float16" (with GradScaler) or "bfloat16".
+    amp_dtype: str = "float16"
     lr: float = 2e-5
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0

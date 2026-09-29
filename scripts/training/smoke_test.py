@@ -9,6 +9,7 @@ Usage:
     uv run python scripts/training/smoke_test.py
 """
 
+import argparse
 import shutil
 import sys
 import tempfile
@@ -33,7 +34,14 @@ from src.pipelines.train import train  # noqa: E402
 from src.utils.model_utils import save_tiny_backbone  # noqa: E402
 
 
-def main() -> None:
+VARIANTS = {
+    "flat": {},
+    "entail2": {"head": "entail2"},
+    "lora": {"lora": {"r": 4, "alpha": 8, "target_modules": ["query", "value"]}},
+}
+
+
+def main(variant: str = "flat") -> None:
     torch.manual_seed(0)
     tmp = Path(tempfile.mkdtemp(prefix="dico_smoke_"))
     try:
@@ -44,7 +52,7 @@ def main() -> None:
         write_dico_csv(data / "dev_track1.csv", make_synthetic_dico(n_pairs=20, seed=1))
         backbone = save_tiny_backbone(tmp / "tiny-bert", SYNTHETIC_WORDS)
 
-        model_cfg = ModelConfig(backbone=backbone, max_length=32)
+        model_cfg = ModelConfig(backbone=backbone, max_length=32, **VARIANTS[variant])
         model = PairClassifier(model_cfg, build_hf_model(model_cfg))
         cfg = TrainingConfig(
             data_root=str(data),
@@ -77,10 +85,12 @@ def main() -> None:
         assert header == "instance_id,label", header
         rows = len(pred_file.read_text().splitlines()) - 1
         assert rows == len(read_dico_csv(data / "dev_track1.csv"))
-        print("\nsmoke test: PASS")
+        print(f"\nsmoke test ({variant}): PASS")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--variant", choices=sorted(VARIANTS), default="flat")
+    main(parser.parse_args().variant)

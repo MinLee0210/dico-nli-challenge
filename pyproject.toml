@@ -17,6 +17,10 @@ dependencies = [
 wandb = ["wandb>=0.16"]
 # Pretty training preamble (panels / tables). Falls back to plain text if absent.
 rich = ["rich>=13.0"]
+llm = [
+    "bitsandbytes>=0.46 ; sys_platform == 'linux'",
+    "peft>=0.17",
+]
 
 # Platform-aware torch builds.
 #   - Linux + NVIDIA: resolve the CUDA wheel index.

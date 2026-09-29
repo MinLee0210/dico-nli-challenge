@@ -124,6 +124,53 @@ expect `train/ists_answers_students.csv` under `data_root`, which
 validation, and backbone/seed ensembles. Drop `reverse_negatives`, mmBERT and
 JaunBERT for now. The prior needs organizer approval.
 
+## 2026-09-29 (evening) — error analysis, entail2 head, Qwen3.5 QLoRA (Colab L4)
+
+**Error analysis of clean-7 (dev, source-pair level).** Without the prior,
+the loss is the NEG decision: on T1, 48 of 106 NEG pairs are decoded as a
+reversible label (NEG recall 45%) against 13 of 277 reversible pairs decoded
+NEG. The pooled NEG-vs-rest AUC is 0.90 (T1) / 0.87 (T3), and the best
+threshold gives NEG F1 ≈ 75, so `neg_bias` cannot fix it: this is a ranking
+problem. Missed NEG pairs are iSTS SIMI/REL relations read as entailment
+(*creek / river*, *38 / 39*, *senator / lawmaker*). With the prior, only
+EQ ↔ FE/BE granularity errors remain (3-way accuracy 92.1% T1, 88.8% T3; FE↔BE
+confusions ≈ 2). 27 dev pairs (7%) are missed by all 18 clean runs. Members
+agree too much: error Jaccard 0.61 (mDeBERTa vs XLM-R), 0.69 (seeds).
+
+### E20 — entail2 head (`configs/runs/e20_mdeberta_entail2.yaml`)
+- **Hypothesis:** composing the four labels from p(a⊨b) and p(b⊨a), read off
+  the checkpoint's own NLI entailment output, improves the NEG decision and
+  EQ vs FE/BE.
+- **Result (per-track source decoding, F1/S/H):** e20 78.4/95.8/85.7 vs e8
+  79.4/95.9/87.0; with prior 89.5/100/87.6 vs 90.4/100/88.6. Better on T1
+  (82.6 vs 81.8 WF1; 92.9 vs 91.7 with prior), worse on T3 (75.4 vs 78.8).
+  No gain inside clean-7 (81.0/96.1/88.0) or prior-14 (92.5/100/91.1). NEG
+  recall unchanged (46%). Single seed.
+- **Decision:** not adopted for the multilingual model. Worth one T1 try on
+  DeBERTa-v3-large NLI, where the NLI head is strongest.
+
+### E21 — Qwen3.5-9B QLoRA (`configs/runs/e21_qwen35_9b_qlora.yaml`)
+- **Hypothesis:** an LLM member brings the lexical knowledge the NEG decision
+  lacks (co-hyponym vs hypernym) and errors decorrelated from the encoders.
+- **Setup:** 4-bit NF4, LoRA r=16 all-linear (51M trainable), prompt
+  template, bf16 autocast, 2 passes over Tracks 1–4. L4: 9.3 GiB peak,
+  ~2.7 s per 16-row step with flash-linear-attention.
+- **Result:** stopped during the first pass; no evaluation. A 9B model is
+  outside the intended model-size budget for this system.
+- **Decision:** drop 9B-class LLMs. The LoRA path stays for smaller models.
+  Model budget from here on: cross-encoders up to ~600M parameters.
+
+### E22 — entail2 on DeBERTa-v3-large NLI, T1 (`configs/runs/e22_debl_t1_entail2.yaml`)
+- **Hypothesis:** the entail2 gain seen on English in E20 is larger on the
+  strongest English NLI checkpoint. Compared with e16 (same model, flat head).
+- **Result (T1 dev, source decoding, F1/S/H):** e22 82.8/94.2/86.6 vs e16
+  83.3/95.3/88.1; NEG recall 64% vs 59%. clean-7 + e22 84.5/95.7/89.5 vs
+  clean-7 83.7/95.3/89.9 and clean-7 + e16 83.7/95.3/89.5. With the prior no
+  change (prior-14 + e22 = prior-14 = 94.2/100/93.1). Single seed; W&B run
+  `t76xfctk`.
+- **Decision:** pending the 5-fold grouped CV of e16 vs e22 on T1
+  (`scripts/data/make_folds.py`, runs `cv_<run>_f<k>`).
+
 ## Template
 
 ### <YYYY-MM-DD> — <short name>

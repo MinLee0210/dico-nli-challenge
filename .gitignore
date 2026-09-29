@@ -143,3 +143,6 @@ wandb/
 
 # Internal agent skills (not part of the published repo)
 .agents/
+
+# grouped CV splits derived from the task data (scripts/data/make_folds.py)
+data/folds/

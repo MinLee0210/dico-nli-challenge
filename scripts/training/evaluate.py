@@ -44,7 +44,13 @@ def main() -> None:
         dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=PairCollator(dataset, tokenizer, cfg.max_length, cfg.symmetric),
+        collate_fn=PairCollator(
+            dataset,
+            tokenizer,
+            cfg.max_length,
+            with_swap=cfg.uses_swap,
+            pair_template=cfg.pair_template,
+        ),
     )
     log_probs, _ = predict_log_probs(model, loader, device)
     ids = [ex.instance_id for ex in dataset.examples]

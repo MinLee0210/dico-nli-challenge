@@ -228,33 +228,32 @@ class PairCollator:
         tokenizer,
         max_length: int = 128,
         with_swap: bool = False,
+        pair_template: Optional[str] = None,
     ):
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.max_length = max_length
         # Also emit the (text2, text1) encoding as `sw_*` keys.
         self.with_swap = with_swap
+        # One prompt per pair (decoder backbones) instead of a tokenizer pair.
+        self.pair_template = pair_template
+
+    def _encode(self, firsts: List[str], seconds: List[str]):
+        kwargs = dict(
+            padding=True, truncation=True, max_length=self.max_length, return_tensors="pt"
+        )
+        if self.pair_template is None:
+            return self.tokenizer(firsts, seconds, **kwargs)
+        prompts = [self.pair_template.format(a=a, b=b) for a, b in zip(firsts, seconds)]
+        return self.tokenizer(prompts, **kwargs)
 
     def __call__(self, indices: List[int]) -> Dict[str, torch.Tensor]:
         examples = [self.dataset.examples[i] for i in indices]
-        enc = self.tokenizer(
-            [ex.text1 for ex in examples],
-            [ex.text2 for ex in examples],
-            padding=True,
-            truncation=True,
-            max_length=self.max_length,
-            return_tensors="pt",
-        )
-        batch = dict(enc)
+        text1 = [ex.text1 for ex in examples]
+        text2 = [ex.text2 for ex in examples]
+        batch = dict(self._encode(text1, text2))
         if self.with_swap:
-            sw = self.tokenizer(
-                [ex.text2 for ex in examples],
-                [ex.text1 for ex in examples],
-                padding=True,
-                truncation=True,
-                max_length=self.max_length,
-                return_tensors="pt",
-            )
+            sw = self._encode(text2, text1)
             batch.update({f"sw_{k}": v for k, v in sw.items()})
         position = {idx: pos for pos, idx in enumerate(indices)}
         batch["index"] = torch.tensor(indices, dtype=torch.long)

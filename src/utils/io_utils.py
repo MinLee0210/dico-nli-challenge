@@ -36,7 +36,8 @@ def save_checkpoint(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint = {
-        "model": model.state_dict(),
+        # LoRA runs store only the adapter + head, not the frozen backbone.
+        "model": getattr(model, "trainable_state_dict", model.state_dict)(),
         "step": step,
         "extra": extra or {},
     }

@@ -38,6 +38,22 @@ class ModelConfig:
     # encoder and return 0.5 * (f(a, b) + Rev f(b, a)), so f(b, a) = Rev f(a, b)
     # holds exactly. Costs 2x compute; needs `with_swap` batches.
     symmetric: bool = False
+    # "flat": one 4-way head. "entail2": score entailment in each direction,
+    # q = p(a |= b), q' = p(b |= a), and compose EQ = qq', FE = q(1-q'),
+    # BE = (1-q)q', NEG = (1-q)(1-q'). Reuses an NLI checkpoint's entailment
+    # output instead of re-initialising the head; exactly reversal-equivariant.
+    head: str = "flat"
+    # Decoder backbones read one prompt, not a tokenizer pair; `{a}` / `{b}`
+    # are replaced by text1 / text2. None = native pair encoding.
+    pair_template: Optional[str] = None
+    # PEFT LoRA on the backbone, e.g. {"r": 16, "alpha": 32, "dropout": 0.05,
+    # "target_modules": "all-linear"}. The classification head stays trainable.
+    lora: Optional[dict] = None
+    # 4-bit NF4 base weights (QLoRA); needs `lora` and bitsandbytes.
+    load_in_4bit: bool = False
+    # Dtype of the backbone weights: "float32" (fp16 AMP) or "bfloat16" (LLMs).
+    torch_dtype: str = "float32"
+    gradient_checkpointing: bool = False
 
     def __post_init__(self) -> None:
         if not self.backbone:
@@ -52,7 +68,20 @@ class ModelConfig:
             raise ValueError(
                 f"classifier_dropout must be in [0, 1), got {self.classifier_dropout}"
             )
+        if self.head not in ("flat", "entail2"):
+            raise ValueError(f"head must be 'flat' or 'entail2', got {self.head!r}")
+        if self.head == "entail2" and self.symmetric:
+            raise ValueError("head 'entail2' is already reversal-equivariant; drop symmetric")
+        if self.load_in_4bit and not self.lora:
+            raise ValueError("load_in_4bit needs a lora block")
+        if self.torch_dtype not in ("float32", "bfloat16"):
+            raise ValueError(f"torch_dtype must be float32 or bfloat16, got {self.torch_dtype!r}")
 
     @property
     def tokenizer_name(self) -> str:
         return self.tokenizer or self.backbone
+
+    @property
+    def uses_swap(self) -> bool:
+        """Whether batches must also carry the (text2, text1) encoding."""
+        return self.symmetric or self.head == "entail2"

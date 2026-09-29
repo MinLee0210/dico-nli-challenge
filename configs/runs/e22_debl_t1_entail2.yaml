@@ -1,0 +1,57 @@
+# e16 (Track 1, DeBERTa-v3-large NLI) with the entail2 head: its own NLI head
+# gives p(a|=b) and p(b|=a), which compose EQ/FE/BE/NEG (src/modules/model.py).
+# e20 showed the head helps on English (T1 +0.8 WF1) and hurts on Basque, so it
+# is tested here on the strongest English NLI checkpoint. Otherwise = e16.
+
+data_root: data/raw/dico/final_data
+train_files:
+  - train/dico_nli_train_track1_participant_labeled.csv
+val_files:
+  - dev/dico_nli_dev_track1_participant_labeled.csv
+test_files: []
+# Label-safe train-only augmentation (src/augment.py): reverse_negatives, transitive
+augment: []
+seed: 42
+
+ckpt_dir: checkpoints
+result_dir: results
+run_name: e22_debl_t1_entail2
+
+epochs: 8
+batch_size: 16
+pin_memory: true
+amp: true
+lr: 8.0e-6
+weight_decay: 0.01
+log_every: 50
+eval_every: 1
+ckpt_every: 0
+
+consistency_weight: 0.0  # entail2 is reversal-equivariant by construction
+
+decoding: twin
+neg_bias: 0.0
+structural_prior: false
+
+arch:
+  backbone: MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli
+  max_length: 64
+  head: entail2
+
+lr_scheduler:
+  type: warmup_linear
+  t_max: auto
+  warmup_ratio: 0.1
+early_stopping:
+  enabled: true
+  monitor: dico_mean
+  mode: max
+  patience: 3
+save_best: true
+best_metric: dico_mean
+best_mode: max
+
+wandb:
+  enabled: true
+  project: dico-nli
+epoch_fraction: 0.5

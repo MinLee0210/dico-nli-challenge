@@ -227,6 +227,22 @@ so $g(b,a)=P\,g(a,b)$ holds exactly (Fig.~\ref{fig:symmetric}). The cost is
 two forward passes per example. A unit test checks the identity to within
 $10^{-5}$.
 
+\subsection{Entailment-factorized head}
+The flat head throws away the 3-way NLI head of the checkpoints we start from.
+The four DiCo labels are, however, the four combinations of two entailment
+decisions, so we also built a head that keeps it. With
+$q=p(\text{entailment}\mid a,b)$ and $q'=p(\text{entailment}\mid b,a)$ read from
+the unchanged NLI head, the label distribution is
+\begin{align}
+  p(\EQ) &= q\,q', & p(\FE) &= q\,(1-q'), \nonumber\\
+  p(\BE) &= (1-q)\,q', & p(\NEG) &= (1-q)(1-q').
+\end{align}
+The four terms sum to one, swapping $a$ and $b$ swaps $q$ and $q'$ and hence
+\FE{} and \BE, so the head is exactly reversal-equivariant like the symmetric
+model, and it starts from a working entailment classifier instead of a random
+layer. Training minimises cross-entropy on the composed distribution; the
+consistency term is zero by construction and is switched off.
+
 
 
 \subsection{Training objectives}
@@ -284,7 +300,9 @@ rates were $2\cdot10^{-5}$ for DeBERTa-v3-base, $5\cdot10^{-5}$ for mmBERT,
 $1.5\cdot10^{-5}$ for mDeBERTa and $10^{-5}$ for XLM-R-large. The symmetric
 XLM-R model used batch size 8 to fit in memory. The multilingual models reach
 their best score within the first epoch, so for the main runs we validate
-every 15\% of an epoch and stop after five checks without improvement.
+every 15\% of an epoch and stop after five checks without improvement. The
+factorized-head runs (Section~\ref{sec:factorized}) used the same settings on
+one NVIDIA L4 (24\,GB). We keep every model at or below about 600M parameters.
 
 The early-stopping monitor is the mean of the three official scores with the
 four development files decoded together. It is only used to stop training and
@@ -460,6 +478,34 @@ Moving the \NEG{} threshold $\beta$ only trades one score for another
 (Fig.~\ref{fig:bias}). Lowering it towards $-1.5$ lifts HardCons to 90.3 and
 SoftCons to 99.3 while F1 falls to 76.9; raising it does the reverse. The mean
 of the three scores stays between 88 and 89 over the whole range.
+
+\subsection{Error analysis}
+\label{sec:errors}
+To see why, we pooled the clean-7 log-probabilities per source pair and
+inspected the 383 T1 development pairs. The errors are one-sided: 48 of the 106
+\NEG{} pairs are decoded as a reversible label (\NEG{} recall 45\%), against 13
+of the 277 reversible pairs decoded as \NEG. The pooled \NEG{} score separates
+the two groups with an AUC of 0.90 on T1 and 0.87 on T3, and the best
+threshold on it gives a \NEG{} F1 of only 74.6. This is why $\beta$ cannot
+help: the problem is the ranking, not the cut-off. The missed \NEG{} pairs are
+mostly iSTS SIMI and REL relations that look like entailment, such as
+\emph{a creek}/\emph{in a river}, \emph{38}/\emph{to 39} and
+\emph{Australian senator}/\emph{Australian lawmaker}; telling a hypernym from a
+sibling or a merely related phrase needs lexical knowledge that the phrases
+alone do not carry. Some labels also depend on the sentence the chunks came
+from, which DiCo does not provide: with all language views pooled, 27 of the
+383 source pairs (7.0\%) are missed by all eighteen multilingual clean runs,
+whatever the backbone or loss.
+
+Among the reversible labels the picture is different. Given the prior, the
+ensemble picks the right one of \EQ, \FE{} and \BE{} for 92.1\% of T1 pairs
+and 88.8\% of T3 pairs. Direction is essentially solved: only 2 of the 22 T1
+errors confuse \FE{} with \BE; the rest confuse \EQ{} with one of them, a
+question of granularity. T3 adds 13 \BE-as-\EQ{} errors, so Basque loses
+specificity. Finally, the ensemble members make similar mistakes: the error
+sets of mDeBERTa and XLM-R-large overlap with a Jaccard index of 0.61, and
+those of two mDeBERTa seeds with 0.69, which limits what further seeds of the
+same backbones can add.
 
 
 

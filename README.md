@@ -105,6 +105,8 @@ uv run python scripts/training/train.py --config configs/train.yaml \
 | `multilingual_mrbert.yaml` | MrBERT (BSC, Dec 2025) | all |
 | `multilingual_mdeberta.yaml` | mDeBERTa-v3-base multilingual NLI | all |
 | `track3_jaunbert.yaml` | JaunBERT (HiTZ, Jul 2026, Basque) | T3 |
+| `runs/e20_mdeberta_entail2.yaml` | mDeBERTa NLI, `entail2` head | all |
+| `runs/e21_qwen35_9b_qlora.yaml` | Qwen3.5-9B, 4-bit QLoRA (`uv sync --extra llm`) | all |
 
 **Data augmentation** (train only; `augment:` in the YAML or `--augment`):
 `reverse_negatives` adds the reversed copy of every NEG pair, and `transitive`
@@ -185,7 +187,7 @@ src/
 └── utils/               # io, model (incl. tiny offline backbone), device helpers
 configs/                 # training YAML configs
 scripts/
-├── data/                # fetch_data, inspect_data
+├── data/                # fetch_data, inspect_data, make_folds, ists_to_dico
 ├── training/            # train, evaluate, smoke_test
 └── submission/          # official_score, make_submission
 tests/                   # pytest suite (offline)
@@ -213,7 +215,17 @@ best_metric: dico_mean           # or weighted_f1 / soft_cons / hard_cons / val_
 augment: [reverse_negatives]     # train-only augmentation (src/augment.py)
 arch: {backbone: microsoft/deberta-v3-base, max_length: 128}
 # arch: {backbone: HiTZ/JaunBERT, fix_pair_template: true}  # repair a broken pair template
+# arch: {head: entail2}   # compose labels from p(a|=b), p(b|=a) of the NLI head
+# arch: {backbone: Qwen/Qwen3.5-9B, lora: {r: 16}, load_in_4bit: true,
+#        torch_dtype: bfloat16, pair_template: "A: {a}\nB: {b}"}  # + amp_dtype: bfloat16
 ```
+
+LoRA checkpoints store only the adapter and head; the base model is
+re-downloaded from the Hub when loading.
+
+Grouped CV: `scripts/data/make_folds.py --k 5` writes `data/folds/f<k>/` in the
+official layout (a `pair_id` never straddles folds, same folds on every
+track), so a run only needs `--data_root data/folds/f<k>`.
 
 ## Results, report, model card
 

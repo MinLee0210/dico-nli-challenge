@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 from src.config import ModelConfig
 from src.data import DicoDataset, PairCollator, read_dico_csv, write_predictions
 from src.decoding import DECODING_MODES, decode
-from src.modules.model import PairClassifier, build_tokenizer
+from src.modules.model import PairClassifier, build_tokenizer, place
 from src.pipelines.eval import dico_metrics, format_report, predict_log_probs
 from src.utils.io_utils import save_json
 from src.utils.model_utils import detect_device
@@ -52,8 +52,11 @@ def load_model(ckpt_path: Path, device: torch.device):
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
     raw = torch.load(ckpt_path, map_location=str(device), weights_only=False)
     cfg = config_from_checkpoint(raw)
-    model = PairClassifier(cfg).to(device)
-    model.load_state_dict(raw["model"])
+    model = place(PairClassifier(cfg), device)
+    # LoRA checkpoints hold only adapter + head; the base comes from the hub.
+    missing, unexpected = model.load_state_dict(raw["model"], strict=not cfg.lora)
+    if unexpected or (cfg.lora and not raw["model"]):
+        raise RuntimeError(f"checkpoint does not match the model: {unexpected[:3]}")
     model.eval()
     return model, cfg, build_tokenizer(cfg)
 
@@ -107,7 +110,13 @@ def predict(
                 dataset,
                 batch_size=batch_size,
                 shuffle=False,
-                collate_fn=PairCollator(dataset, tokenizer, cfg.max_length, cfg.symmetric),
+                collate_fn=PairCollator(
+                    dataset,
+                    tokenizer,
+                    cfg.max_length,
+                    with_swap=cfg.uses_swap,
+                    pair_template=cfg.pair_template,
+                ),
             )
             log_probs, _ = predict_log_probs(model, loader, device)
             logprob_dir = out_dir / "logprobs"

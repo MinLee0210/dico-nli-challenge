@@ -34,7 +34,7 @@ from src.config import ModelConfig
 from src.data import DicoDataset, PairCollator, TwinBatchSampler, read_dico_files
 from src.labels import NEGATIVE_ID
 from src.modules.loss import DicoLoss
-from src.modules.model import PairClassifier, build_tokenizer, model_inputs
+from src.modules.model import PairClassifier, build_tokenizer, model_inputs, place
 from src.pipelines._utils import announce_training
 from src.pipelines.config import TrainingConfig, load_training_config
 from src.pipelines.eval import HEADLINE_METRICS, eval_per_epoch, format_report
@@ -59,7 +59,7 @@ def _paths(data_root: str, names: Optional[List[str]]) -> List[Path]:
 
 
 def build_model(model_cfg: ModelConfig, device: torch.device) -> PairClassifier:
-    return PairClassifier(model_cfg).to(device)
+    return place(PairClassifier(model_cfg), device)
 
 
 def build_optimizer(model: torch.nn.Module, train_cfg: TrainingConfig):
@@ -139,9 +139,8 @@ def build_callbacks(
 def build_loaders(
     train_cfg: TrainingConfig,
     tokenizer,
-    max_length: int,
+    model_cfg: ModelConfig,
     device: torch.device,
-    symmetric: bool = False,
 ) -> tuple[DataLoader, Optional[DataLoader], Optional[DataLoader], DicoDataset]:
     """Returns (train_loader, val_loader, test_loader, train_dataset)."""
     train_paths = _paths(train_cfg.data_root, train_cfg.train_files)
@@ -160,6 +159,15 @@ def build_loaders(
 
     pin_memory = train_cfg.pin_memory and device.type == "cuda"
 
+    def collator(dataset: DicoDataset) -> PairCollator:
+        return PairCollator(
+            dataset,
+            tokenizer,
+            model_cfg.max_length,
+            with_swap=model_cfg.uses_swap,
+            pair_template=model_cfg.pair_template,
+        )
+
     def eval_loader(names: List[str]) -> Optional[DataLoader]:
         paths = _paths(train_cfg.data_root, names)
         if not paths:
@@ -171,7 +179,7 @@ def build_loaders(
             shuffle=False,
             num_workers=train_cfg.num_workers,
             pin_memory=pin_memory,
-            collate_fn=PairCollator(dataset, tokenizer, max_length, symmetric),
+            collate_fn=collator(dataset),
         )
 
     train_loader = DataLoader(
@@ -185,7 +193,7 @@ def build_loaders(
         ),
         num_workers=train_cfg.num_workers,
         pin_memory=pin_memory,
-        collate_fn=PairCollator(train_dataset, tokenizer, max_length, symmetric),
+        collate_fn=collator(train_dataset),
     )
     return (
         train_loader,
@@ -238,6 +246,7 @@ def train_per_epoch(
     epoch,
     log_every,
     max_grad_norm=1.0,
+    amp_dtype=None,
 ):
     model.train()
     epoch_losses, pending = [], []
@@ -247,7 +256,9 @@ def train_per_epoch(
         labels = batch["labels"].to(device)
         twin = batch["twin"].to(device)
 
-        with torch.autocast(device_type=device.type, enabled=scaler.is_enabled()):
+        with torch.autocast(
+            device_type=device.type, dtype=amp_dtype, enabled=amp_dtype is not None
+        ):
             logits, _ = model(**model_inputs(batch, device))
             loss = criterion(logits.float(), labels, twin)
 
@@ -314,11 +325,11 @@ def train(
     )
     tokenizer = tokenizer if tokenizer is not None else build_tokenizer(model_cfg)
     train_loader, val_loader, test_loader, train_dataset = build_loaders(
-        train_cfg, tokenizer, model_cfg.max_length, device, model_cfg.symmetric
+        train_cfg, tokenizer, model_cfg, device
     )
     print(f"train examples: {len(train_dataset)}  backbone: {model_cfg.backbone}")
 
-    model = model.to(device) if model is not None else build_model(model_cfg, device)
+    model = place(model, device) if model is not None else build_model(model_cfg, device)
     criterion = DicoLoss(
         label_smoothing=train_cfg.label_smoothing,
         consistency_weight=train_cfg.consistency_weight,
@@ -326,9 +337,12 @@ def train(
         focal_gamma=train_cfg.focal_gamma,
     ).to(device)
     optimizer = build_optimizer(model, train_cfg)
+    use_amp = train_cfg.amp and device.type == "cuda"
+    amp_dtype = getattr(torch, train_cfg.amp_dtype) if use_amp else None
+    # bf16 has fp32's exponent range, so only fp16 needs loss scaling.
     scaler = torch.amp.GradScaler(
         "cuda" if device.type == "cuda" else "cpu",
-        enabled=(train_cfg.amp and device.type == "cuda"),
+        enabled=use_amp and train_cfg.amp_dtype == "float16",
     )
 
     run_name = train_cfg.run_name or get_run_name(
@@ -369,7 +383,7 @@ def train(
 
     if train_cfg.resume_from:
         raw = torch.load(train_cfg.resume_from, map_location=str(device))
-        model.load_state_dict(raw["model"])
+        model.load_state_dict(raw["model"], strict=not model_cfg.lora)
         if "optimizer" in raw:
             optimizer.load_state_dict(raw["optimizer"])
         step = int(raw.get("step", 0))
@@ -413,6 +427,7 @@ def train(
             epoch,
             train_cfg.log_every,
             train_cfg.max_grad_norm,
+            amp_dtype,
         )
         record = {"epoch": epoch, "step": step, "loss": train_loss}
         print(f"epoch {epoch:3d}/{train_cfg.epochs}  train_loss={train_loss:.4f}")

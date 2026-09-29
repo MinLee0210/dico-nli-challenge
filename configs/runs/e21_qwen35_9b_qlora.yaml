@@ -1,0 +1,69 @@
+# Qwen3.5-9B as a 4-way sequence classifier (last-token score head), QLoRA:
+# 4-bit NF4 base, bf16 compute, LoRA r=16 on every linear layer. A decoder has
+# no pair encoding, so each pair is one prompt (`pair_template`). Trained on
+# Tracks 1-4; validation pools all language views (`decoding: source`).
+# Needs the `llm` extra (peft, bitsandbytes) and a bf16 GPU (L4 / A100).
+
+data_root: data/raw/dico/final_data
+train_files:
+  - train/dico_nli_train_track1_participant_labeled.csv
+  - train/dico_nli_train_track2_participant_labeled.csv
+  - train/dico_nli_train_track3_participant_labeled.csv
+  - train/dico_nli_train_track4_participant_labeled.csv
+val_files:
+  - dev/dico_nli_dev_track1_participant_labeled.csv
+  - dev/dico_nli_dev_track2_participant_labeled.csv
+  - dev/dico_nli_dev_track3_participant_labeled.csv
+  - dev/dico_nli_dev_track4_participant_labeled.csv
+test_files: []
+augment: []
+seed: 42
+
+ckpt_dir: checkpoints
+result_dir: results
+run_name: e21_qwen35_9b_qlora
+
+epochs: 8  # x epoch_fraction 0.25 = 2 full passes
+batch_size: 16
+accum_steps: 2
+pin_memory: true
+amp: true
+amp_dtype: bfloat16
+lr: 1.0e-4
+weight_decay: 0.0
+log_every: 50
+eval_every: 1
+ckpt_every: 0
+# Validate every quarter epoch: DiCo runs peak early.
+epoch_fraction: 0.25
+
+consistency_weight: 0.5
+
+decoding: source
+neg_bias: 0.0
+structural_prior: false
+
+arch:
+  backbone: Qwen/Qwen3.5-9B
+  max_length: 96
+  torch_dtype: bfloat16
+  load_in_4bit: true
+  gradient_checkpointing: true
+  lora: {r: 16, alpha: 32, dropout: 0.05, target_modules: all-linear}
+  pair_template: "Phrase A: {a}\nPhrase B: {b}\nRelation (equivalent, A entails B, B entails A, or other):"
+
+lr_scheduler:
+  type: warmup_linear
+  t_max: auto
+  warmup_ratio: 0.05
+early_stopping:
+  enabled: true
+  monitor: dico_mean
+  mode: max
+  patience: 3
+save_best: true
+best_metric: dico_mean
+best_mode: max
+
+wandb:
+  enabled: true

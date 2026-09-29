@@ -5,7 +5,7 @@ per track (never pooling across tracks) in `source` mode, with and without
 `structural_prior`. Rows are `name & T1 F1/S/H & ... & ALL-4 F1/S/H \\\\`.
 
     PYTHONPATH=. uv run python scripts/training/report_tables.py \
-        --logprob_dir results/dev/logprobs --out docs/report/tables
+        --logprob_dir results/dev/logprobs --out docs/reports/tables
 """
 
 import argparse
@@ -36,6 +36,7 @@ SYSTEMS = {
     r"\quad A + focal ($\gamma$=2)": (["e18_mdeberta_focal2"], False),
     r"\quad A + iSTS answers-students": (["e19_mdeberta_ists"], False),
     r"\quad A, symmetric arch.": (["e9_mdeberta_sym"], False),
+    r"\quad A, entail2 head": (["e20_mdeberta_entail2"], False),
     "XLM-R-large XNLI (B)": (["e7_xlmr_large"], False),
     r"\quad B + rev.-neg. aug.": (["e13_xlmr_revneg"], False),
     r"\quad B + iSTS answers-students": (["e19_xlmr_ists"], False),
