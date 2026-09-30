@@ -232,7 +232,7 @@ track), so a run only needs `--data_root data/folds/f<k>`.
 - Technical report: [`docs/reports/dico_nli_report.pdf`](docs/reports/dico_nli_report.pdf)
   (source `.tex` alongside; tables from `scripts/training/report_tables.py`).
 - Model card: [`docs/reports/MODEL_CARD.md`](docs/reports/MODEL_CARD.md). Checkpoints
-  are in the private Hugging Face repo `LakoreAI/dico-nli-checkpoints`.
+  are on Hugging Face: [`LakoreAI/dico-nli-checkpoints`](https://huggingface.co/LakoreAI/dico-nli-checkpoints).
 - Run log: [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md).
 
 Dev-set ALL-4 Weighted F1 / SoftCons / HardCons (official scorer):
