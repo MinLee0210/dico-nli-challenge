@@ -56,15 +56,19 @@ the labels it gives to $(a,b)$ and $(b,a)$ agree. We fine-tune multilingual
 cross-encoders and move consistency out of training and into decoding: the
 log-probabilities of a pair and its reversed twin are mapped into one frame,
 averaged, and decoded once, so every pair predicted as reversible is
-consistent by construction. On the development set, a seven-model ensemble
-reaches a Weighted F1 of 80.8, SoftCons of 95.7 and HardCons of 88.0,
-averaged over the English, Spanish, Basque and mixed tracks. Almost all
-remaining errors separate the negative class from the three entailment
-labels. Five methods aimed at that decision, including focal loss, extra iSTS
-data and a stacked classifier, did not beat the plain ensemble. If the
-reversible/negative split is read from the layout of the input files, scores
-rise to 92.6, 100 and 91.2, above the current development leader. We report
-that variant separately because it depends on how the data were packaged.
+consistent by construction. Almost all remaining errors lie in deciding whether
+a pair is in an entailment relation at all. Six methods aimed at that decision,
+including focal loss, extra iSTS and WordNet data and a stacked classifier,
+did not beat a plain ensemble. What did help is a hierarchical composition:
+ordinary four-way models decide the negative class, and models trained only on
+the three entailment labels choose among them. Averaged over the English,
+Spanish, Basque and mixed tracks of the development set, this raises Weighted
+F1 / SoftCons / HardCons from 80.8 / 95.7 / 88.0 to 81.4 / 96.8 / 89.5 with fixed
+members, and to 83.7 / 98.6 / 91.7 with members selected per track. If the
+reversible/negative split is read from the layout of the input files, a
+selected ensemble reaches 94.3 / 100 / 93.1, above the current development
+leader (91.4 / 100 / 89.7). We report that variant separately because it
+depends on how the data were packaged.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -87,11 +91,13 @@ decoding time for free, because both directions of every reversible pair are
 in the same input file. We average the two directions' scores in a shared
 frame and choose a single label for the pair. This leaves the classifier with
 one job, which is to separate the entailment family from everything else.
-That job turned out to be the hard part. The contributions of this report are
-the decoding scheme and an exactly reversal-equivariant variant of the
-cross-encoder, a comparison of four multilingual backbones, and a negative
-result: none of the five \NEG-focused methods we tried improved on a plain
-ensemble. Code, configurations and run logs are
+That job turned out to be the hard part. This report describes the decoding
+scheme and two exactly reversal-equivariant model variants; compares seven
+backbones, including two multilingual rerankers; profiles where the errors come
+from; and reports a negative result, since none of the six \NEG-focused
+methods we tried improved on a plain ensemble. The method that did help reuses
+models trained without the negative class inside a hierarchical composition,
+and per-track ensemble selection adds more on the development set. Code, configurations and run logs are
 public.\footnote{\url{https://github.com/MinLee0210/dico-nli-challenge}}
 
 \begin{figure*}[t]
@@ -166,6 +172,66 @@ each monolingual track and twelve in T4. Each monolingual track has 3{,}042
 training rows (1{,}282 reversible pairs and 478 \NEG) and 660 development rows
 (277 and 106).
 
+Table~\ref{tab:profile} splits the English pairs by how their words overlap,
+which turns out to predict where models go wrong. When the words of one phrase
+are contained in the other (\emph{in a field}/\emph{in a huge field}), the pair
+is almost always directional: 418 of 458
+training pairs are \FE{} or \BE{} and only 13 are \NEG. When the phrases share
+no word at all, \EQ{} (142) and \NEG{} (114) dominate, and telling them apart
+needs lexical knowledge: \emph{climbs}/\emph{moves up} is \EQ{}, while
+\emph{along a runway}/\emph{on the tarmac} is \NEG. Most \NEG{} pairs (351 of
+478) fall in the middle group, where the phrases share some words and differ in
+others (\emph{on Monday}/\emph{on Thursday}, \emph{across the sand}/\emph{through
+the water}). Only 43 training pairs contain two different numbers, so numeric
+mismatch is a minor error source. Fig.~\ref{fig:profile} shows the label mix of
+each group.
+
+\begin{table}[t]
+\centering
+\caption{English (T1) source pairs by lexical overlap between the two phrases,
+with the gold label distribution. ``Contained'': the word set of one phrase is
+a strict subset of the other.}
+\label{tab:profile}
+\begin{tabular}{llrrrrr}
+\toprule
+Split & Overlap & \EQ & \FE & \BE & \NEG & Total \\
+\midrule
+train & none      & 142 &  55 &  54 & 114 & 365 \\
+      & partial   & 230 & 163 & 191 & \textbf{351} & 935 \\
+      & contained &  27 & 218 & 200 &  13 & 458 \\
+\midrule
+dev   & none      &  27 &   8 &   8 &  27 &  70 \\
+      & partial   &  53 &  39 &  52 & \textbf{75} & 219 \\
+      & contained &   7 &  47 &  36 &   4 &  94 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar stacked, width=0.95\columnwidth, height=3.6cm,
+  bar width=9pt, xmin=0, xmax=100,
+  xlabel={share of training pairs (\%)},
+  symbolic y coords={contained,partial,none}, ytick=data,
+  legend style={font=\footnotesize, at={(0.5,1.04)}, anchor=south, draw=none,
+                legend columns=4, /tikz/every even column/.append style={column sep=2mm}},
+  tick label style={font=\footnotesize}, label style={font=\footnotesize},
+  enlarge y limits=0.25,
+]
+\addplot[fill=blue!55, draw=none] coordinates {(38.9,none) (24.6,partial) (5.9,contained)};
+\addplot[fill=orange!70, draw=none] coordinates {(15.1,none) (17.4,partial) (47.6,contained)};
+\addplot[fill=teal!60, draw=none] coordinates {(14.8,none) (20.4,partial) (43.7,contained)};
+\addplot[fill=red!60, draw=none] coordinates {(31.2,none) (37.5,partial) (2.8,contained)};
+\legend{\EQ, \FE, \BE, \NEG}
+\end{axis}
+\end{tikzpicture}
+\caption{Label mix of the English training pairs in each overlap group of
+Table~\ref{tab:profile}.}
+\label{fig:profile}
+\end{figure}
+
 \section{Related Work}
 
 Interpretable STS~\cite{lopezgazpio2017ists,semeval2016ists} introduced the
@@ -182,6 +248,14 @@ simple lexical inferences~\cite{glockner2018breaking}, and on focal
 loss~\cite{lin2017focal} and intermediate-task transfer~\cite{pruksachatkun2020intermediate}
 as remedies. For Basque we rely on multilingual encoders; XLM-R-large was the
 strongest of the multilingual encoders evaluated on XNLIeu~\cite{xnlieu2024}.
+Lexical knowledge in NLI has often come from WordNet~\cite{miller1995wordnet};
+the Open Multilingual Wordnet~\cite{bond2013omw} and the Multilingual Central
+Repository~\cite{gonzalezagirre2012mcr} link Spanish and Basque wordnets to the
+same synsets, which we use to build training pairs for all three languages.
+Beyond NLI checkpoints, we try two multilingual rerankers of a different
+pretraining lineage, BGE-M3's reranker~\cite{chen2024bgem3} and the Qwen3
+reranker~\cite{qwen3embedding2025}. Our ensembles use greedy forward selection
+from a library of models~\cite{caruana2004ensemble}.
 
 \section{System}
 
@@ -228,6 +302,7 @@ two forward passes per example. A unit test checks the identity to within
 $10^{-5}$.
 
 \subsection{Entailment-factorized head}
+\label{sec:factorized}
 The flat head throws away the 3-way NLI head of the checkpoints we start from.
 The four DiCo labels are, however, the four combinations of two entailment
 decisions, so we also built a head that keeps it. With
@@ -267,6 +342,69 @@ every result with and without it. \emph{Prior-aware} models are trained on the
 three reversible labels only, since under the prior the model is never asked
 about \NEG; they must not be used without it.
 
+\subsection{Hierarchical composition}
+\label{sec:hier}
+Prior-aware models turn out to be better at choosing among \EQ, \FE{} and \BE{}
+than models that also learn \NEG, because none of their capacity goes to the
+fourth class. We reuse them without the prior by composing two ensembles
+(Fig.~\ref{fig:hier}). A \emph{gate} ensemble of ordinary four-way models gives
+$g=p(\NEG)$, and a \emph{direction} ensemble of prior-aware models gives a
+distribution $q$ over the three reversible labels:
+\begin{equation}
+  p(\NEG)=g,\qquad p(c)=(1-g)\,q(c),\quad c\in\{\EQ,\FE,\BE\}.
+\end{equation}
+The composed scores go through the same consistency-aware decoding as any
+other model. Nothing here reads the file layout: the gate decides \NEG{} from
+the phrases alone.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=4mm and 4mm]
+  \node[box, fill=io, text width=16mm] (in) {$(a,b)$};
+  \node[box, fill=enc, text width=24mm, above right=2mm and 8mm of in] (gate) {gate ensemble\\{\scriptsize 4-way models}};
+  \node[box, fill=enc, text width=24mm, below right=2mm and 8mm of in] (dir) {direction ensemble\\{\scriptsize prior-aware models}};
+  \node[box, fill=dec, text width=17mm, right=6mm of gate] (g) {$g=p(\NEG)$};
+  \node[box, fill=dec, text width=17mm, right=6mm of dir] (q) {$q(\EQ,\FE,\BE)$};
+  \node[box, fill=dec, text width=24mm, right=6mm of $(g.east)!0.5!(q.east)$] (c)
+    {$[(1-g)\,q,\; g]$\\{\scriptsize then decoding}};
+  \draw[arr] (in.north) |- (gate); \draw[arr] (in.south) |- (dir);
+  \draw[arr] (gate) -- (g); \draw[arr] (dir) -- (q);
+  \draw[arr] (g.east) -| ($(c.north)+(-4mm,0)$); \draw[arr] (q.east) -| ($(c.south)+(-4mm,0)$);
+\end{tikzpicture}
+\caption{Hierarchical composition. Ordinary four-way models decide whether the
+pair is \NEG; prior-aware models, trained on the reversible labels only, decide
+which reversible label it is. No file-layout information is used.}
+\label{fig:hier}
+\end{figure}
+
+\subsection{Lexical-relation data from WordNet}
+\label{sec:wordnet}
+To give the models the hypernym-versus-sibling knowledge that the error
+analysis (Section~\ref{sec:errors}) points to, we generate short pairs from the
+Open Multilingual Wordnet~\cite{bond2013omw} through the \texttt{wn}
+library~\cite{goodman2021wn}. English, Spanish and Basque synsets share
+interlingual identifiers, so one English hypernym graph labels all three
+languages. A hyponym with its direct hypernym gives \FE{} (\emph{creek}
+$\models$ \emph{stream}), with the reversed row as \BE; two lemmas of one
+synset give \EQ; two siblings under the same hypernym give \NEG{}
+(\emph{creek}/\emph{river}), written once as DiCo writes \NEG{} pairs. We draw
+600 pairs per label and language, 30\% of them with the two phrases in
+different languages as in T4, for 9{,}000 rows in total, and add them to the
+training data. The lemmas come from the whole wordnet, so many are rarer than
+the caption and headline vocabulary of DiCo.
+
+\subsection{Ensemble selection}
+\label{sec:selection}
+With about forty trained models, we choose ensemble members by greedy forward
+selection~\cite{caruana2004ensemble}: start from the best single model and
+repeatedly add, with replacement, the model that most raises the mean of the
+three official scores, stopping when no addition helps. Each track is ranked on
+its own, so we select a separate ensemble per track, which also lets T1 use
+English-only models. For the hierarchical system, each step may add a model to
+either the gate or the direction ensemble. Selection uses the development
+labels, so selected scores are optimistic estimates of test performance; we
+report fixed ensembles alongside them.
+
 \section{Experimental Setup}
 % Held until the next column break (page 3) so it does not share a page with Fig.~1.
 \afterpage{%
@@ -302,7 +440,13 @@ XLM-R model used batch size 8 to fit in memory. The multilingual models reach
 their best score within the first epoch, so for the main runs we validate
 every 15\% of an epoch and stop after five checks without improvement. The
 factorized-head runs (Section~\ref{sec:factorized}) used the same settings on
-one NVIDIA L4 (24\,GB). We keep every model at or below about 600M parameters.
+one NVIDIA L4 (24\,GB), and the reranker, WordNet and later prior-aware runs on
+one NVIDIA A40 (48\,GB), up to four at a time. bge-reranker-v2-m3 uses a
+learning rate of $10^{-5}$; Qwen3-Reranker-0.6B, a decoder, reads the pair
+through a short prompt (\emph{Phrase A: \ldots\ Phrase B: \ldots\ Relation:})
+with bf16 autocast and a learning rate of $2\cdot10^{-5}$, and is classified
+from its last token. We keep every model at or below about 600M parameters.
+All runs are logged to Weights \& Biases.
 
 The early-stopping monitor is the mean of the three official scores with the
 four development files decoded together. It is only used to stop training and
@@ -313,6 +457,42 @@ tracks and decoding modes, and the headline results were re-scored with the
 official scorer.
 
 \section{Results}
+
+\begin{table*}[t]
+\centering
+\caption{Development results without the structural prior (F1 = Weighted F1,
+S = SoftCons, H = HardCons, in \%). A = mDeBERTa, fine-grained validation;
+B = XLM-R-large XNLI. Single seeds except ensembles. Best value per column in
+bold.}
+\label{tab:clean}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l*{15}{c}}
+\toprule
+\trackhead
+\midrule
+\tabinput{tables/dev_clean.tex}
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\caption{Development results with the structural prior, and the CodaBench
+development leader on 29 September 2026. Best value per column among our
+systems in bold; columns where all systems tie are not marked.}
+\label{tab:prior}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l*{15}{c}}
+\toprule
+\trackhead
+\midrule
+\tabinput{tables/dev_prior.tex}
+\midrule
+Leaderboard \#1 & 92.4 & 100 & 91.0 & 92.8 & 100 & 91.3 & 90.3 & 100 & 88.4 & 90.2 & 100 & 88.2 & 91.4 & 100 & 89.7 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
 
 \subsection{Decoding}
 Table~\ref{tab:decoding} isolates decoding on a single DeBERTa-v3-base model
@@ -353,10 +533,12 @@ A (mDeBERTa)            & 79.4 & 95.9 & 87.0 \\
 \quad + focal, $\gamma=2$ & 78.2 & 94.4 & 85.9 \\
 \quad + reverse negatives & 80.2 & 91.2 & 83.1 \\
 \quad + iSTS answers-students & 77.8 & 96.2 & 87.0 \\
+\quad + WordNet pairs & 80.0 & 93.4 & 85.6 \\
 \midrule
 B (XLM-R-large)         & 78.8 & 96.3 & 86.3 \\
 \quad + reverse negatives & 74.3 & 92.7 & 79.6 \\
 \quad + iSTS answers-students & 77.6 & 92.8 & 84.3 \\
+\quad + WordNet pairs & 77.3 & 95.8 & 84.7 \\
 \midrule
 Clean-7 ensemble        & 80.8 & 95.7 & 88.0 \\
 \quad + stacked \NEG{} detector & \textbf{81.4} & 91.8 & 84.7 \\
@@ -415,45 +597,56 @@ the best system averages fourteen of them. It reaches 92.6 / 100 / 91.2 over
 the four tracks, above the development leader (91.4 / 100 / 89.7) on T1, T3,
 T4 and the average, and slightly below it on T2.
 
-\begin{table*}[t]
-\centering
-\caption{Development results without the structural prior (F1 = Weighted F1,
-S = SoftCons, H = HardCons, in \%). A = mDeBERTa, fine-grained validation;
-B = XLM-R-large XNLI. Single seeds except ensembles. Best value per column in
-bold.}
-\label{tab:clean}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{l*{15}{c}}
-\toprule
-\trackhead
-\midrule
-\tabinput{tables/dev_clean.tex}
-\bottomrule
-\end{tabular}}
-\end{table*}
+The two rerankers, added for diversity, are weaker than the NLI checkpoints.
+bge-reranker-v2-m3 reaches 75.7 / 96.2 / 82.6 without the prior, three to four
+F1 points below mDeBERTa and XLM-R-large. Qwen3-Reranker-0.6B does worse still
+(62.6 F1): it almost never predicts \NEG, which gives it the highest SoftCons in
+Table~\ref{tab:clean} and the lowest F1. With the prior both stay behind the
+NLI encoders, so relevance-ranking pretraining does not transfer well to
+this label set.
 
-\begin{table*}[t]
+The WordNet pairs of Section~\ref{sec:wordnet} move F1 in the right direction
+for mDeBERTa (80.0 against 79.4) at a cost in consistency (93.4 SoftCons
+against 95.9), and hurt XLM-R-large on every metric. In the prior-aware models
+they help neither the plain nor the symmetric variant. We read this as a
+domain problem: pairs such as \emph{filaria}/\emph{nematoda} teach relations
+between rare words, while the missed \NEG{} pairs in DiCo are between common
+words used in context.
+
+
+
+
+
+\begin{table}[!t]
 \centering
-\caption{Development results with the structural prior, and the CodaBench
-development leader on 29 September 2026. Best value per column among our
-systems in bold; columns where all systems tie are not marked.}
-\label{tab:prior}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{l*{15}{c}}
+\caption{Development submissions, confirmed with the official scorer (ALL-4,
+in \%). ``Sel.'' marks member lists chosen on the development set; ``Prior''
+marks use of the structural prior. Best value per column in bold.}
+\label{tab:systems}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccc}
 \toprule
-\trackhead
+Run id & Sel. & Prior & W-F1 & SoftCons & HardCons \\
 \midrule
-\tabinput{tables/dev_prior.tex}
+\texttt{clean7}      &     &     & 80.8 & 95.7 & 88.0 \\
+\texttt{hier\_fixed} &     &     & 81.4 & 96.8 & 89.5 \\
+\texttt{sel\_clean}  & \checkmark &  & 82.0 & 97.7 & 90.2 \\
+\texttt{sel\_hier}   & \checkmark &  & 83.7 & 98.6 & 91.7 \\
 \midrule
-Leaderboard \#1 & 92.4 & 100 & 91.0 & 92.8 & 100 & 91.3 & 90.3 & 100 & 88.4 & 90.2 & 100 & 88.2 & 91.4 & 100 & 89.7 \\
+\texttt{prior14}     &     & \checkmark & 92.6 & \textbf{100.0} & 91.2 \\
+\texttt{sel\_prior}  & \checkmark & \checkmark & 94.2 & \textbf{100.0} & \textbf{93.1} \\
+\texttt{sel\_prior\_v2} & \checkmark & \checkmark & \textbf{94.3} & \textbf{100.0} & \textbf{93.1} \\
+\midrule
+Leaderboard \#1 & & & 91.4 & 100.0 & 89.7 \\
 \bottomrule
-\end{tabular}}
-\end{table*}
+\end{tabular}
+\end{table}
 
 \subsection{The negative class}
 Without the prior, the three reversible labels are rarely confused with each
 other; the errors that remain are almost all \NEG{} against the rest. We tested
-five ways to improve that decision (Table~\ref{tab:neg}).
+six ways to improve that decision (Table~\ref{tab:neg}); the sixth, WordNet
+relation pairs, is discussed with the new backbones above.
 
 Class weighting (weight 2 on \NEG) and focal loss ($\gamma=2$) lowered HardCons
 on mDeBERTa by 3.9 and 1.1 points. Reverse-negative augmentation gained 0.8 F1
@@ -509,6 +702,30 @@ same backbones can add.
 
 
 
+\subsection{Hierarchical composition and ensemble selection}
+\label{sec:hierresults}
+Table~\ref{tab:systems} lists the systems we packaged as development
+submissions. The hierarchical composition helps without any selection. With
+the clean-7 ensemble as the gate and eleven prior-aware models as the direction
+ensemble, it reaches 81.4 / 96.8 / 89.5, against 80.8 / 95.7 / 88.0 for
+clean-7 alone, with higher HardCons on all four tracks (T1 F1 is unchanged). Since both member lists are fixed
+in advance, this is the estimate we trust most for unseen data. Adding the
+WordNet and reranker models to the gate lowers it slightly (81.3 / 96.2 /
+89.0).
+
+Greedy selection per track adds more on the development set. Without the
+prior, selecting gate and direction members jointly gives 83.7 / 98.6 / 91.7,
+which is 2.9 F1 and 3.7 HardCons points above clean-7 and above the
+leaderboard leader on HardCons, though still 7.7 F1 points behind it. With the
+prior, per-track selection reaches 94.3 / 100 / 93.1, ahead of the leader on
+every track. The selections pick odd members: mmBERT and the reverse-negative
+XLM-R model, both weak on their own, appear in some tracks, and the chosen
+sets change when more candidates are added. That instability is the usual sign
+of fitting the development set, so we expect selected systems to lose part of
+their margin on test data.
+
+
+
 \subsection{Cross-track pooling}
 Because a \texttt{pair\_id} is shared by all tracks, decoding the four
 development files together pools up to eighteen views of each source pair. In
@@ -527,14 +744,22 @@ points, so differences of one or two points between single runs are within
 noise, and the reported scores are optimistic. Grouped cross-validation over
 the training and development data would give firmer estimates. Second, the
 lead over the leaderboard depends entirely on the structural prior. Without
-it, our best system is about eleven points of F1 behind, and the gap is the
-\NEG{} decision.
+it, our best selected system is 7.7 points of F1 behind and our best fixed
+system 10.0 points, and the gap is the \NEG{} decision. Selected ensembles
+are also the least trustworthy numbers in this report: their member lists
+change when candidates are added, and several members are weak on their own.
+For the evaluation phase we would submit fixed ensembles, such as
+\texttt{hier\_fixed}, trained on training and development data together.
 
 The negative results are consistent with what is known about NLI models on
 short, lexically overlapping inputs~\cite{hans2019,glockner2018breaking}: the
 hard \NEG{} cases are phrases that are related, similar or opposite, and more
-weight, more data of the same kind or extra surface features did not teach the
-models to separate them. Methods that change the model's inductive bias rather
+weight, more data of the same kind, WordNet relations between rare words or
+extra surface features did not teach the models to separate them. Two
+further directions stay within our model budget: lexical-relation pairs drawn
+from the vocabulary of DiCo itself rather than the whole wordnet, and grouped
+cross-validation over training and development data to select ensembles on
+held-out folds instead of on the development set. Methods that change the model's inductive bias rather
 than its training signal, such as larger instruction-tuned models used as
 teachers, are the obvious next step.
 
@@ -543,10 +768,14 @@ teachers, are the obvious next step.
 Consistency in DiCo-NLI can be guaranteed by decoding the two directions of a
 pair together, which raises SoftCons and HardCons at no training cost. With
 that in place, the task reduces to deciding whether a phrase pair stands in an
-entailment relation at all. Our clean seven-model ensemble reaches 80.8 / 95.7
-/ 88.0 on the development set; the same models with a layout-based prior reach
-92.6 / 100 / 91.2. Whether that prior may be used in the evaluation phase is a
-question for the organizers.
+entailment relation at all, and the evidence we collected says this decision
+is limited by lexical knowledge about common words in context. Splitting the
+work between a negative-class gate and a direction model trained only on the
+entailment labels is the one change that helped without selection, lifting the
+fixed clean ensemble to 81.4 / 96.8 / 89.5 on the development set. Selected
+ensembles reach 83.7 / 98.6 / 91.7 without and 94.3 / 100 / 93.1 with the
+layout-based prior. Whether that prior may be used in the evaluation phase is
+a question for the organizers.
 
 \bibliographystyle{IEEEtran}
 \bibliography{refs}

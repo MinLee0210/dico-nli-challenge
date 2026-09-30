@@ -171,6 +171,44 @@ agree too much: error Jaccard 0.61 (mDeBERTa vs XLM-R), 0.69 (seeds).
 - **Decision:** pending the 5-fold grouped CV of e16 vs e22 on T1
   (`scripts/data/make_folds.py`, runs `cv_<run>_f<k>`).
 
+## 2026-09-30 — new backbones, WordNet pairs, hierarchical composition, selection (A40)
+
+All numbers are ALL-4 F1 / SoftCons / HardCons on dev, per-track source
+decoding. Checkpoints, dev log-probs and configs are in HF
+`LakoreAI/dico-nli-checkpoints`, and runs are logged to W&B `octoopt/dico-nli`.
+
+| Run | Setup | Clean | With prior |
+|---|---|---|---|
+| e23_qwen3rr(_prior) | Qwen3-Reranker-0.6B, prompt template, bf16 | 62.6/99.8/77.7 | 82.2/100/79.7 |
+| e24_bgerr(_prior), e33 | bge-reranker-v2-m3 | 75.7/96.2/82.6 | 89.7/100/87.8 |
+| e25, e32 | mDeBERTa + 9k WordNet pairs (`scripts/data/wordnet_pairs.py`) | 80.0/93.4/85.6 | 90.4/100/88.6 |
+| e26 | XLM-R-large + WordNet pairs | 77.3/95.8/84.7 | 89.3/100/87.1 |
+| e27, e28 | prior-aware mDeBERTa (+sym) + WordNet | — | 90.3 / 91.6 F1 |
+| e29, e30 | symmetric prior-aware mDeBERTa, seeds 1–2 | — | ens. members |
+| e31 | prior-aware XLM-R + WordNet | — | 91.3/100/89.5 |
+
+**Findings.**
+- The rerankers are weaker than the NLI checkpoints.
+- WordNet pairs help clean mDeBERTa F1 slightly but lower consistency. They hurt
+  XLM-R, and do nothing for the prior-aware models (the rare-word domain does
+  not match DiCo).
+- **Hierarchical composition** (`scripts/training/hierarchical_eval.py`)
+  combines a NEG gate from clean-7 with EQ/FE/BE from 11 prior-aware models.
+  With fixed members it scores 81.4/96.8/89.5, against 80.8/95.7/88.0 for
+  clean-7 (`hier_fixed`).
+- **Greedy per-track selection** (`scripts/training/ensemble_select.py`,
+  `hierarchical_eval.py --select`) is dev-optimistic:
+  - `sel_hier` 83.7/98.6/91.7
+  - `sel_clean` 82.0/97.7/90.2
+  - `sel_prior_v2` 94.3/100/93.1 (leader 91.4/100/89.7)
+
+**Submissions** are in `results/submissions/<run_id>/submission.zip`: clean7,
+hier_fixed, sel_clean, sel_hier, prior14, sel_prior, sel_prior_v2.
+
+**Decision.**
+- Dev leaderboard: `sel_prior_v2` (needs the prior) or `sel_hier` (clean).
+- Test phase: fixed ensembles (`hier_fixed` recipe) retrained on train+dev.
+
 ## Template
 
 ### <YYYY-MM-DD> — <short name>

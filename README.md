@@ -235,9 +235,11 @@ track), so a run only needs `--data_root data/folds/f<k>`.
   are in the private Hugging Face repo `LakoreAI/dico-nli-checkpoints`.
 - Run log: [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md).
 
-Dev-set ALL-4 Weighted F1 / SoftCons / HardCons: clean-7 ensemble
-80.8 / 95.7 / 88.0; with the structural prior (pending organizer approval)
-92.6 / 100 / 91.2.
+Dev-set ALL-4 Weighted F1 / SoftCons / HardCons (official scorer):
+hierarchical fixed ensemble 81.4 / 96.8 / 89.5, selected 83.7 / 98.6 / 91.7;
+with the structural prior (pending organizer approval), selected
+94.3 / 100 / 93.1. Submissions: `results/submissions/<run_id>/submission.zip`
+(gitignored; also on the HF repo).
 
 ## Citation
 
